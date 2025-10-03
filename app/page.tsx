@@ -1,5 +1,4 @@
-import RiskRadar from "../components/RiskRadar";
-import CandleChart from "../components/CandleChart";
+import CandleChart from "@/components/CandleChart";
 import LoginPage from "./login/page";
 
 export default function Home() {
@@ -10,7 +9,7 @@ export default function Home() {
       >
         Binance Candlestick Chart + Risk Radar
       </h1>
-      <LoginPage />
+      <CandleChart />
     </main>
   );
 }

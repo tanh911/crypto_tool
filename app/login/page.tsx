@@ -18,7 +18,8 @@ export default function LoginPage() {
       setMessage("Login successful!");
 
       router.push("/chart"); // redirect sau khi login
-    } catch (err) {
+    } catch (error) {
+      console.error(error);
       setMessage("Login failed: ");
     }
   };

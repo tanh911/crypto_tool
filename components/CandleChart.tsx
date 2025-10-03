@@ -79,6 +79,21 @@ const PREDICTION_CONFIGS = {
   },
 };
 
+interface Prediction {
+  direction: "BULLISH" | "BEARISH" | "NEUTRAL";
+  confidence: number;
+  pattern: string;
+  targetPrice?: number;
+  stopLoss?: number;
+  signals?: string[];
+  sma9?: number;
+  sma20?: number;
+  currentPrice?: number;
+  support?: number;
+  resistance?: number;
+  trend?: "UPTREND" | "DOWNTREND" | "RANGE";
+}
+
 function calculatePredictionScore(candle: Candle, flags: string[]): number {
   let score = 50;
   flags.forEach((f) => {
@@ -104,13 +119,7 @@ export default function CandleChart() {
   const [isVisible, setIsVisible] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [prediction, setPrediction] = useState<{
-    direction: string;
-    confidence: number;
-    pattern: string;
-    targetPrice?: number;
-    stopLoss?: number;
-  } | null>(null);
+  const [prediction, setPrediction] = useState<Prediction | null>(null);
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
@@ -272,8 +281,7 @@ export default function CandleChart() {
     [activeFilters]
   );
 
-  // HÀM PREDICT PATTERNS - SỬ DỤNG SMA9 VÀ SMA20
-  // HÀM PREDICT PATTERNS - SỬ DỤNG SMA9, SMA20 VÀ HIGH/LOW ANALYSIS
+  // HÀM PREDICT PATTERNS - ĐÃ SỬA LỖI TYPE
   const predictPatterns = useCallback(
     (
       candles: {
@@ -284,7 +292,10 @@ export default function CandleChart() {
         close: number;
         volume?: number;
       }[]
-    ): { markers: SeriesMarker<UTCTimestamp>[]; prediction: any } => {
+    ): {
+      markers: SeriesMarker<UTCTimestamp>[];
+      prediction: Prediction | null;
+    } => {
       const markers: SeriesMarker<UTCTimestamp>[] = [];
 
       if (candles.length < 20) return { markers, prediction: null };
@@ -301,12 +312,6 @@ export default function CandleChart() {
       // SMA calculations
       const sma9 = prices.slice(-9).reduce((a, b) => a + b, 0) / 9;
       const sma20 = prices.reduce((a, b) => a + b, 0) / prices.length;
-
-      // HIGH/LOW ANALYSIS - QUAN TRỌNG
-      const recentHighs = highs.slice(-10);
-      const recentLows = lows.slice(-10);
-      const currentHigh = highs[highs.length - 1];
-      const currentLow = lows[lows.length - 1];
 
       // Tìm swing highs và swing lows
       const swingHighs: number[] = [];
@@ -373,8 +378,6 @@ export default function CandleChart() {
       // Key resistance và support levels
       const resistanceLevel = dynamicResistance;
       const supportLevel = dynamicSupport;
-      const secondaryResistance = (resistanceLevel + Math.max(...highs)) / 2;
-      const secondarySupport = (supportLevel + Math.min(...lows)) / 2;
 
       // Volume analysis
       const avgVolume = volumes.reduce((a, b) => a + b, 0) / volumes.length;
@@ -390,14 +393,10 @@ export default function CandleChart() {
 
       let gains = 0;
       let losses = 0;
-
       for (let i = 1; i < rsiPrices.length; i++) {
         const change = rsiPrices[i] - rsiPrices[i - 1];
-        if (change > 0) {
-          gains += change;
-        } else {
-          losses += Math.abs(change);
-        }
+        if (change > 0) gains += change;
+        else losses += Math.abs(change);
       }
 
       const avgGain = gains / rsiPeriod || 0.001;
@@ -405,15 +404,15 @@ export default function CandleChart() {
       const rs = avgGain / avgLoss;
       const rsi = 100 - 100 / (1 + rs);
 
-      // PREDICTION LOGIC VỚI HIGH/LOW ANALYSIS
-      let predictionDirection = "NEUTRAL";
+      // PREDICTION LOGIC - FIXED: Properly typed direction
+      let predictionDirection: "BULLISH" | "BEARISH" | "NEUTRAL" = "NEUTRAL";
       let confidence = 50;
       let pattern = "RANGE_BOUND";
       let targetPrice: number | undefined;
       let stopLoss: number | undefined;
 
-      // Bullish signals với High/Low analysis
-      const bullishSignals = [];
+      // Bullish signals
+      const bullishSignals: string[] = [];
       if (currentPrice > sma9 && sma9 > sma20) {
         bullishSignals.push("SMA_BULLISH_CROSS");
         confidence += 15;
@@ -427,7 +426,6 @@ export default function CandleChart() {
         bullishSignals.push("RSI_BULLISH");
         confidence += 10;
       }
-      // Breakout above resistance
       if (currentPrice > resistanceLevel * 0.995) {
         bullishSignals.push("BREAKING_RESISTANCE");
         confidence += 15;
@@ -439,17 +437,16 @@ export default function CandleChart() {
         bullishSignals.push("VOLUME_CONFIRMATION");
         confidence += 5;
       }
-      // Strong support bounce
       if (
-        currentLow > supportLevel * 1.005 &&
+        currentPrice > supportLevel * 1.005 &&
         currentPrice > recentCandles[recentCandles.length - 2].close
       ) {
         bullishSignals.push("SUPPORT_BOUNCE");
         confidence += 10;
       }
 
-      // Bearish signals với High/Low analysis
-      const bearishSignals = [];
+      // Bearish signals
+      const bearishSignals: string[] = [];
       if (currentPrice < sma9 && sma9 < sma20) {
         bearishSignals.push("SMA_BEARISH_CROSS");
         confidence += 15;
@@ -463,7 +460,6 @@ export default function CandleChart() {
         bearishSignals.push("RSI_BEARISH");
         confidence += 10;
       }
-      // Breakdown below support
       if (currentPrice < supportLevel * 1.005) {
         bearishSignals.push("BREAKING_SUPPORT");
         confidence += 15;
@@ -475,20 +471,18 @@ export default function CandleChart() {
         bearishSignals.push("VOLUME_CONFIRMATION");
         confidence += 5;
       }
-      // Resistance rejection
       if (
-        currentHigh < resistanceLevel * 0.995 &&
+        currentPrice < resistanceLevel * 0.995 &&
         currentPrice < recentCandles[recentCandles.length - 2].close
       ) {
         bearishSignals.push("RESISTANCE_REJECTION");
         confidence += 10;
       }
 
-      // Pattern recognition với High/Low confirmation
+      // Pattern recognition với logic thực tế
       const lastCandle = recentCandles[recentCandles.length - 1];
-      const prevCandle = recentCandles[recentCandles.length - 2];
 
-      // STRONG TREND PATTERNS với High/Low confirmation
+      // STRONG TREND PATTERNS
       if (
         bullishSignals.includes("UPTREND_HH_HL") &&
         bullishSignals.includes("SMA_BULLISH_CROSS")
@@ -496,8 +490,8 @@ export default function CandleChart() {
         pattern = "STRONG_UPTREND";
         predictionDirection = "BULLISH";
         confidence = Math.min(90, 70 + bullishSignals.length * 3);
-        targetPrice = resistanceLevel * 1.02; // Target next resistance
-        stopLoss = Math.min(lastCandle.low * 0.99, supportLevel * 0.98);
+        targetPrice = currentPrice * 1.03;
+        stopLoss = Math.min(lastCandle.low * 0.99, sma20 * 0.98);
       } else if (
         bearishSignals.includes("DOWNTREND_LH_LL") &&
         bearishSignals.includes("SMA_BEARISH_CROSS")
@@ -505,67 +499,49 @@ export default function CandleChart() {
         pattern = "STRONG_DOWNTREND";
         predictionDirection = "BEARISH";
         confidence = Math.min(90, 70 + bearishSignals.length * 3);
-        targetPrice = supportLevel * 0.98; // Target next support
-        stopLoss = Math.max(lastCandle.high * 1.01, resistanceLevel * 1.02);
+        targetPrice = currentPrice * 0.97;
+        stopLoss = Math.max(lastCandle.high * 1.01, sma20 * 1.02);
       }
-      // BREAKOUT PATTERNS với volume confirmation
+      // BREAKOUT PATTERNS
       else if (bullishSignals.includes("BREAKING_RESISTANCE") && volumeSpike) {
         pattern = "RESISTANCE_BREAKOUT";
         predictionDirection = "BULLISH";
         confidence = 80;
-        targetPrice = resistanceLevel * 1.03; // 3% above resistance
-        stopLoss = resistanceLevel * 0.99; // Below breakout level
+        targetPrice = resistanceLevel * 1.02;
+        stopLoss = resistanceLevel * 0.99;
       } else if (bearishSignals.includes("BREAKING_SUPPORT") && volumeSpike) {
         pattern = "SUPPORT_BREAKDOWN";
         predictionDirection = "BEARISH";
         confidence = 80;
-        targetPrice = supportLevel * 0.97; // 3% below support
-        stopLoss = supportLevel * 1.01; // Above breakdown level
+        targetPrice = supportLevel * 0.98;
+        stopLoss = supportLevel * 1.01;
       }
-      // REVERSAL PATTERNS tại key levels
-      else if (
-        bullishSignals.includes("SUPPORT_BOUNCE") &&
-        lastCandle.close > lastCandle.open
-      ) {
+      // REVERSAL PATTERNS
+      else if (bullishSignals.includes("SUPPORT_BOUNCE")) {
         pattern = "SUPPORT_REVERSAL";
         predictionDirection = "BULLISH";
         confidence = 75;
-        targetPrice = secondaryResistance;
+        targetPrice = currentPrice * 1.02;
         stopLoss = supportLevel * 0.995;
-      } else if (
-        bearishSignals.includes("RESISTANCE_REJECTION") &&
-        lastCandle.close < lastCandle.open
-      ) {
+      } else if (bearishSignals.includes("RESISTANCE_REJECTION")) {
         pattern = "RESISTANCE_REVERSAL";
         predictionDirection = "BEARISH";
         confidence = 75;
-        targetPrice = secondarySupport;
+        targetPrice = currentPrice * 0.98;
         stopLoss = resistanceLevel * 1.005;
       }
-      // RANGE BOUND PATTERNS
-      else if (
-        !higherHighs &&
-        !lowerLows &&
-        Math.abs(resistanceLevel - supportLevel) / supportLevel < 0.05
-      ) {
-        pattern = "RANGE_BOUND";
-        predictionDirection = "NEUTRAL";
-        confidence = 60;
-        targetPrice = undefined;
-        stopLoss = undefined;
-      }
-      // MILD TREND PATTERNS
+      // MILD TREND BASED ON SIGNAL STRENGTH
       else if (bullishSignals.length > bearishSignals.length + 2) {
         pattern = "BULLISH_BIAS";
         predictionDirection = "BULLISH";
         confidence = 65 + bullishSignals.length * 2;
-        targetPrice = currentPrice * 1.02;
+        targetPrice = currentPrice * 1.015;
         stopLoss = Math.min(sma20 * 0.99, supportLevel * 0.995);
       } else if (bearishSignals.length > bullishSignals.length + 2) {
         pattern = "BEARISH_BIAS";
         predictionDirection = "BEARISH";
         confidence = 65 + bearishSignals.length * 2;
-        targetPrice = currentPrice * 0.98;
+        targetPrice = currentPrice * 0.985;
         stopLoss = Math.max(sma20 * 1.01, resistanceLevel * 1.005);
       }
 
@@ -693,42 +669,27 @@ export default function CandleChart() {
         });
       }
 
-      const predictionResult =
-        predictionDirection !== "NEUTRAL"
-          ? {
-              direction: predictionDirection,
-              confidence: Math.min(95, Math.max(confidence, 40)),
-              pattern,
-              targetPrice,
-              stopLoss,
-              signals:
-                predictionDirection === "BULLISH"
-                  ? bullishSignals
-                  : bearishSignals,
-              sma9,
-              sma20,
-              currentPrice,
-              support: supportLevel,
-              resistance: resistanceLevel,
-              trend:
-                higherHighs && higherLows
-                  ? "UPTREND"
-                  : lowerHighs && lowerLows
-                  ? "DOWNTREND"
-                  : "RANGE",
-            }
-          : {
-              direction: "NEUTRAL",
-              confidence: 50,
-              pattern: "RANGE_BOUND",
-              signals: [...bullishSignals, ...bearishSignals],
-              sma9,
-              sma20,
-              currentPrice,
-              support: supportLevel,
-              resistance: resistanceLevel,
-              trend: "RANGE",
-            };
+      // FIX: Properly create Prediction object with correct types
+      const predictionResult: Prediction = {
+        direction: predictionDirection,
+        confidence: Math.min(95, Math.max(confidence, 40)),
+        pattern,
+        targetPrice,
+        stopLoss,
+        signals:
+          predictionDirection === "BULLISH" ? bullishSignals : bearishSignals,
+        sma9,
+        sma20,
+        currentPrice,
+        support: supportLevel,
+        resistance: resistanceLevel,
+        trend:
+          higherHighs && higherLows
+            ? "UPTREND"
+            : lowerHighs && lowerLows
+            ? "DOWNTREND"
+            : "RANGE",
+      };
 
       return { markers, prediction: predictionResult };
     },
