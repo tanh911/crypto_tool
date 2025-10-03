@@ -121,7 +121,7 @@ export default function CandleChart() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [prediction, setPrediction] = useState<Prediction | null>(null);
 
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+  const API_URL = "https://be-crypto-tool.onrender.com";
 
   const [activeFilters, setActiveFilters] = useState({
     SMC: true,
