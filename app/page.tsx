@@ -1,6 +1,4 @@
-import RiskRadar from "../components/RiskRadar";
-import CandleChart from "../components/CandleChart";
-import LoginPage from "./login/page";
+import CandleChart from "@/components/CandleChart";
 
 export default function Home() {
   return (
