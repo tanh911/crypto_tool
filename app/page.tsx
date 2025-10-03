@@ -10,7 +10,7 @@ export default function Home() {
       >
         Binance Candlestick Chart + Risk Radar
       </h1>
-      <LoginPage />
+      <CandleChart />
     </main>
   );
 }
