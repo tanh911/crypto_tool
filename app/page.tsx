@@ -1,8 +1,4 @@
 import CandleChart from "@/components/CandleChart";
-<<<<<<< HEAD
-import LoginPage from "./login/page";
-=======
->>>>>>> refs/remotes/origin/main
 
 export default function Home() {
   return (
