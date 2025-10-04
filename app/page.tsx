@@ -1,4 +1,4 @@
-import CandleChart from "@/components/CandleChart";
+import CandleChart from "../components/CandleChart/index";
 
 export default function Home() {
   return (

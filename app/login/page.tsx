@@ -9,7 +9,7 @@ export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
-  const API_URL = "https://be-crypto-tool.onrender.com";
+  const API_URL = "http://localhost:4000";
 
   const handleLogin = async () => {
     try {
