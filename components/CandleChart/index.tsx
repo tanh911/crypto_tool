@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { ChartControls } from "./components/ChartControls";
 import { StatusBar } from "./components/StatusBar";
 import { FilterSection } from "./components/FilterSection";
@@ -10,6 +10,8 @@ import { usePatternDetection } from "./hooks/usePatternDetection";
 import { useDataFetching } from "./hooks/useDataFetching";
 import { RiskData, ActiveFilters, Prediction } from "./types";
 import { TrendAnalysis } from "./components/TrendAnalysis";
+import Image from "next/image";
+import QRCODE from "../../public/OvD4M6ar.jpg";
 
 // Helper function để tạo ActiveFilters object với tất cả keys
 const createActiveFilters = (value: boolean): ActiveFilters => ({
@@ -52,43 +54,92 @@ export default function CandleChart() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [prediction, setPrediction] = useState<Prediction | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [historicalYears, setHistoricalYears] = useState<number>(0); // 0 = không load historical
+  const [historicalYears, setHistoricalYears] = useState<number>(0);
 
   const [activeFilters, setActiveFilters] = useState<ActiveFilters>(
     createActiveFilters(true)
   );
 
-  const { chartContainerRef, candleSeriesRef, chartInstance } = useChart();
+  // Chart container ref
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+
   const { detectPatterns, detectChartPatterns, predictPatterns } =
     usePatternDetection(activeFilters);
 
-  const { fetchData, fetchLargeHistoricalData, trendAnalysis } =
-    useDataFetching({
-      coin,
-      interval,
-      activeFilters,
-      setRiskData,
-      setLastUpdate,
-      setPrediction,
-      setIsLoading,
-      candleSeriesRef,
-      chartInstance,
-      detectPatterns,
-      detectChartPatterns,
-      predictPatterns,
-    });
+  // ✅ FIXED: Pass chartContainerRef to useDataFetching
+  const { fetchData, trendAnalysis } = useDataFetching({
+    coin,
+    interval,
+    activeFilters,
+    setRiskData,
+    setLastUpdate,
+    setPrediction,
+    setIsLoading,
+    chartContainerRef, // Pass the chart container ref
+    detectPatterns,
+    detectChartPatterns,
+    predictPatterns,
+  });
 
-  // EFFECT 1: Fetch data khi coin hoặc interval thay đổi (realtime data)
+  const isInitialMount = useRef(true);
+  const refreshTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isFetchingRef = useRef(false);
+
+  const [isBackgroundLoading, setIsBackgroundLoading] = useState(false);
+
+  const optimizedFetchData = useCallback(
+    async (isRefresh: boolean = false, years: number = 0) => {
+      if (isFetchingRef.current) {
+        console.log("⏳ Fetch already in progress, skipping...");
+        return;
+      }
+
+      try {
+        isFetchingRef.current = true;
+
+        if (years > 0 || !isInitialMount.current) {
+          setIsLoading(true);
+        } else {
+          setIsBackgroundLoading(true);
+        }
+
+        setError(null);
+        await fetchData();
+      } catch (err) {
+        console.error("Error fetching data:", err);
+        setError("Failed to fetch data. Please try again.");
+      } finally {
+        setIsLoading(false);
+        setIsBackgroundLoading(false);
+        isFetchingRef.current = false;
+
+        if (isInitialMount.current) {
+          isInitialMount.current = false;
+        }
+      }
+    },
+    [fetchData]
+  );
+
+  // EFFECT 1: Fetch data khi coin hoặc interval thay đổi
   useEffect(() => {
     if (!historicalYears || historicalYears === 0) {
-      console.log(`🔄 Auto-fetching for ${coin} with interval ${interval}`);
-      const loadData = async () => {
-        setError(null);
-        await fetchData(false);
-      };
-      loadData();
+      if (refreshTimeoutRef.current) {
+        clearTimeout(refreshTimeoutRef.current);
+      }
+
+      refreshTimeoutRef.current = setTimeout(() => {
+        console.log(`🔄 Fetching data for ${coin} with interval ${interval}`);
+        optimizedFetchData(false);
+      }, 300);
     }
-  }, [coin, interval, historicalYears, fetchData]); // Thêm interval vào dependency
+
+    return () => {
+      if (refreshTimeoutRef.current) {
+        clearTimeout(refreshTimeoutRef.current);
+      }
+    };
+  }, [coin, interval, historicalYears, optimizedFetchData]);
 
   // EFFECT 2: Auto refresh
   useEffect(() => {
@@ -112,9 +163,14 @@ export default function CandleChart() {
       );
 
       intervalId = window.setInterval(() => {
-        if (autoRefresh && isMounted && !historicalYears) {
-          console.log("Auto-refreshing data...");
-          fetchData(true);
+        if (
+          autoRefresh &&
+          isMounted &&
+          !historicalYears &&
+          !isFetchingRef.current
+        ) {
+          console.log("🔄 Auto-refreshing data...");
+          optimizedFetchData(true);
         }
       }, refreshTime);
     };
@@ -129,19 +185,15 @@ export default function CandleChart() {
         window.clearInterval(intervalId);
       }
     };
-  }, [fetchData, autoRefresh, interval, historicalYears]);
+  }, [optimizedFetchData, autoRefresh, interval, historicalYears]);
 
-  // EFFECT 3: Load historical data khi historicalYears thay đổi
+  // EFFECT 3: Load historical data
   useEffect(() => {
     if (historicalYears > 0) {
       console.log(`📊 Loading historical data: ${historicalYears} years`);
-      const loadHistorical = async () => {
-        setError(null);
-        await fetchData(false, historicalYears);
-      };
-      loadHistorical();
+      optimizedFetchData(false, historicalYears);
     }
-  }, [fetchData, historicalYears]);
+  }, [optimizedFetchData, historicalYears]);
 
   const toggleFilter = (filterName: keyof ActiveFilters) => {
     setActiveFilters((prev) => ({
@@ -158,11 +210,11 @@ export default function CandleChart() {
     setActiveFilters(createActiveFilters(false));
   };
 
-  const handleRefresh = () => {
+  const handleRefresh = useCallback(() => {
     setError(null);
-    setHistoricalYears(0); // Reset về realtime data
-    fetchData(true);
-  };
+    setHistoricalYears(0);
+    optimizedFetchData(true);
+  }, [optimizedFetchData]);
 
   const handleLoadHistorical = async (years: number) => {
     setError(null);
@@ -171,20 +223,20 @@ export default function CandleChart() {
 
   const handleCoinChange = (newCoin: string) => {
     setError(null);
-    setHistoricalYears(0); // Reset về realtime data khi đổi coin
+    setHistoricalYears(0);
     setCoin(newCoin);
   };
 
   const handleIntervalChange = (newInterval: string) => {
     setError(null);
-    setHistoricalYears(0); // Reset về realtime data khi đổi interval
+    setHistoricalYears(0);
     setInterval(newInterval);
   };
 
   const handleResetToRealtime = () => {
     setHistoricalYears(0);
     setError(null);
-    fetchData(true);
+    optimizedFetchData(true);
   };
 
   return (
@@ -230,7 +282,7 @@ export default function CandleChart() {
         handleRefresh={handleRefresh}
       />
 
-      {/* Historical Data Controls với realtime indicator */}
+      {/* Historical Data Controls */}
       <div
         style={{
           marginBottom: 16,
@@ -270,8 +322,11 @@ export default function CandleChart() {
             )}
           </div>
           <div style={{ marginLeft: "auto", fontSize: 12, color: "#666" }}>
-            {/* {riskData &&
-              `Loaded: ${riskData.candles.length} candles • ${riskData.interval}`} */}
+            {(isLoading || isBackgroundLoading) && (
+              <span style={{ color: "#2196f3" }}>
+                {isLoading ? "🔄 Loading..." : "⏳ Updating..."}
+              </span>
+            )}
           </div>
         </div>
 
@@ -315,7 +370,6 @@ export default function CandleChart() {
           ))}
         </div>
 
-        {/* Hiển thị trạng thái */}
         {isLoading && (
           <div
             style={{
@@ -333,7 +387,7 @@ export default function CandleChart() {
                 {historicalYears > 1 ? "s" : ""} of historical data...
               </>
             ) : (
-              <>🔄 Loading real-time data for {interval} interval...</>
+              <>🔄 Loading real-time data for ${interval} interval...</>
             )}
           </div>
         )}
@@ -355,17 +409,35 @@ export default function CandleChart() {
         deselectAllFilters={deselectAllFilters}
       />
 
+      {/* Main Price Chart */}
       <div
         ref={chartContainerRef}
         style={{
           position: "relative",
           border: "1px solid #e0e0e0",
-          borderRadius: 8,
+          borderRadius: "8px",
           overflow: "hidden",
-          minHeight: 550,
+          minHeight: 600,
+          height: 600,
+          backgroundColor: "white",
         }}
       />
+
+      {/* Volume Chart Container */}
+      {/* <div
+        ref={volumeChartContainerRef}
+        style={{
+          border: "1px solid #e0e0e0",
+          borderTop: "none",
+          borderRadius: "0 0 8px 8px",
+          overflow: "hidden",
+          height: 150,
+          marginBottom: 16,
+        }}
+      /> */}
+
       <TrendAnalysis trendAnalysis={trendAnalysis} />
+
       {riskData && (
         <RiskPanel
           riskData={riskData}
@@ -373,64 +445,58 @@ export default function CandleChart() {
           setIsVisible={setIsVisible}
         />
       )}
-      {isLoading && (
+
+      {/* QR Code Section */}
+      <div>
+        <Image
+          src={QRCODE}
+          alt="Volume Chart Layout"
+          width={250}
+          height={250}
+          style={{
+            borderRadius: "8px",
+            border: "1px solid #dee2e6",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+          }}
+          placeholder="blur"
+        />
         <div
           style={{
-            position: "fixed",
-            top: "50%",
-            left: "50%",
-            transform: "translate(-50%, -50%)",
-            padding: "20px 30px",
-            backgroundColor: "rgba(0,0,0,0.9)",
-            color: "white",
-            borderRadius: 12,
-            fontSize: 16,
-            zIndex: 1000,
-            textAlign: "center",
-            minWidth: 300,
+            marginTop: "8px",
+            fontSize: "12px",
+            color: "#6c757d",
+            width: "250px",
           }}
         >
-          {historicalYears > 0 ? (
-            <>
-              <div style={{ marginBottom: 12 }}>
-                📊 Loading Historical Data...
-              </div>
-              <div style={{ fontSize: 14, opacity: 0.8, marginBottom: 8 }}>
-                {coin} ({interval}) - {historicalYears} year
-                {historicalYears > 1 ? "s" : ""}
-              </div>
-            </>
-          ) : (
-            <>
-              <div style={{ marginBottom: 12 }}>
-                🔄 Loading Real-time Data...
-              </div>
-              <div style={{ fontSize: 14, opacity: 0.8, marginBottom: 8 }}>
-                {coin} ({interval})
-              </div>
-            </>
-          )}
-          <div style={{ fontSize: 12, opacity: 0.6 }}>Fetching from API...</div>
-          <div
+          <p
             style={{
-              marginTop: 12,
-              height: 4,
-              backgroundColor: "#333",
-              borderRadius: 2,
-              overflow: "hidden",
+              fontSize: "20px",
+              fontWeight: "bold",
+              textAlign: "left",
+              color: "#d32f2f",
+              margin: 0,
+              padding: "16px 32px",
+              backgroundColor: "#ffebee",
+              borderRadius: "8px",
+              border: "2px dashed #d32f2f",
+              width: "250px",
             }}
           >
-            <div
-              style={{
-                height: "100%",
-                backgroundColor: "#2196f3",
-                width: "60%",
-                animation: "pulse 1.5s ease-in-out infinite",
-              }}
-            />
-          </div>
+            Ủng hộ mifnh nha
+          </p>
         </div>
-      )}
+      </div>
+
+      <style jsx>{`
+        @keyframes spin {
+          0% {
+            transform: rotate(0deg);
+          }
+          100% {
+            transform: rotate(360deg);
+          }
+        }
+      `}</style>
     </div>
   );
 }

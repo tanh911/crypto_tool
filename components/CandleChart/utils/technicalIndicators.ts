@@ -1,186 +1,252 @@
 // utils/technicalIndicators.ts
 import { CandleData } from "../types";
+import { VolumeCluster, VolumeProfileLevel } from "../types";
 
-// Tính Simple Moving Average
-// utils/technicalIndicators.ts
+/* ------------------------- MOVING AVERAGES ------------------------- */
 export const calculateSMA = (
-  candles: CandleData[],
+  data: CandleData[],
   period: number
-): number[] => {
-  if (candles.length < period) {
-    console.warn(
-      `❌ Not enough candles for SMA${period}: ${candles.length} < ${period}`
-    );
-    return [];
+): (number | null)[] => {
+  if (data.length < period) return data.map(() => null);
+
+  const sma: (number | null)[] = new Array(period - 1).fill(null);
+
+  for (let i = period - 1; i < data.length; i++) {
+    const slice = data.slice(i - period + 1, i + 1);
+    const sum = slice.reduce((total, candle) => total + candle.close, 0);
+    sma.push(sum / period);
   }
 
-  const sma: number[] = [];
-
-  // Fill với null values cho các period đầu tiên
-  for (let i = 0; i < period - 1; i++) {
-    sma.push(0); // ✅ ĐÚNG: push null thay vì any
-  }
-
-  // Tính SMA cho các period đủ
-  for (let i = period - 1; i < candles.length; i++) {
-    const slice = candles.slice(i - period + 1, i + 1);
-    const sum = slice.reduce((acc, candle) => acc + candle.close, 0);
-    const average = sum / period;
-    sma.push(average);
-  }
-
-  console.log(
-    `✅ SMA${period} calculated: ${sma.length} values (${
-      sma.filter((v) => v !== null).length
-    } valid)`
-  );
   return sma;
 };
 
-// Tính Exponential Moving Average
 export const calculateEMA = (
-  candles: CandleData[],
+  data: CandleData[],
   period: number
-): number[] => {
-  if (candles.length < period) return [];
+): (number | null)[] => {
+  if (data.length < period) return data.map(() => null);
 
-  const ema: number[] = [];
-  const multiplier = 2 / (period + 1);
+  const k = 2 / (period + 1);
+  const ema: (number | null)[] = new Array(period - 1).fill(null);
 
-  // SMA đầu tiên
-  let emaValue =
-    candles.slice(0, period).reduce((acc, candle) => acc + candle.close, 0) /
+  // First EMA value is SMA
+  const firstSMA =
+    data.slice(0, period).reduce((sum, candle) => sum + candle.close, 0) /
     period;
-  ema.push(emaValue);
+  ema.push(firstSMA);
 
-  // Các EMA tiếp theo
-  for (let i = period; i < candles.length; i++) {
-    emaValue = (candles[i].close - emaValue) * multiplier + emaValue;
-    ema.push(emaValue);
+  for (let i = period; i < data.length; i++) {
+    const currentEMA = data[i].close * k + ema[i - 1]! * (1 - k);
+    ema.push(currentEMA);
   }
 
   return ema;
 };
 
-// Phân tích xu hướng
+/* ------------------------- TREND ANALYSIS -------------------------- */
+export interface TrendAnalysis {
+  trend: "BULLISH" | "BEARISH" | "SIDEWAYS";
+  strength: number;
+  signals: string[];
+  maTrend?: "BULLISH" | "BEARISH" | "NEUTRAL";
+  pricePosition?: "ABOVE_MA" | "BELOW_MA" | "NEAR_MA";
+}
+
 export const analyzeTrend = (
   candles: CandleData[],
   ma25: number[],
   ma99: number[]
-): {
-  trend: "BULLISH" | "BEARISH" | "SIDEWAYS";
-  strength: number;
-  signals: string[];
-} => {
-  if (candles.length < 100 || ma25.length < 2 || ma99.length < 2) {
-    return { trend: "SIDEWAYS", strength: 0, signals: [] };
+): TrendAnalysis => {
+  if (candles.length < 2) {
+    return {
+      trend: "SIDEWAYS",
+      strength: 0,
+      signals: ["INSUFFICIENT_DATA"],
+    };
   }
 
   const signals: string[] = [];
   let bullishSignals = 0;
   let bearishSignals = 0;
 
+  // Price position analysis
   const currentPrice = candles[candles.length - 1].close;
-  const currentMA25 = ma25[ma25.length - 1];
-  const currentMA99 = ma99[ma99.length - 1];
-  const prevMA25 = ma25[ma25.length - 2];
-  const prevMA99 = ma99[ma99.length - 2];
+  const previousPrice = candles[candles.length - 2].close;
 
-  // Tín hiệu MA
-  if (currentMA25 > currentMA99) {
-    signals.push("MA25_ABOVE_MA99");
-    bullishSignals++;
-  } else {
-    signals.push("MA25_BELOW_MA99");
-    bearishSignals++;
+  // MA analysis
+  if (ma25.length >= 2 && ma99.length >= 2) {
+    const currentMA25 = ma25[ma25.length - 1];
+    const previousMA25 = ma25[ma25.length - 2];
+    const currentMA99 = ma99[ma99.length - 1];
+    const previousMA99 = ma99[ma99.length - 2];
+
+    // MA crossover signals
+    if (currentMA25 > currentMA99 && previousMA25 <= previousMA99) {
+      signals.push("MA25_CROSSED_ABOVE_MA99");
+      bullishSignals++;
+    }
+    if (currentMA25 < currentMA99 && previousMA25 >= previousMA99) {
+      signals.push("MA25_CROSSED_BELOW_MA99");
+      bearishSignals++;
+    }
+
+    // Price vs MA position
+    if (currentPrice > currentMA25 && currentPrice > currentMA99) {
+      signals.push("PRICE_ABOVE_BOTH_MA");
+      bullishSignals++;
+    } else if (currentPrice < currentMA25 && currentPrice < currentMA99) {
+      signals.push("PRICE_BELOW_BOTH_MA");
+      bearishSignals++;
+    }
   }
 
-  if (currentPrice > currentMA25) {
-    signals.push("PRICE_ABOVE_MA25");
-    bullishSignals++;
-  } else {
-    signals.push("PRICE_BELOW_MA25");
-    bearishSignals++;
+  // Price momentum
+  const priceChange = ((currentPrice - previousPrice) / previousPrice) * 100;
+  if (Math.abs(priceChange) > 0.5) {
+    if (priceChange > 0) {
+      signals.push(`STRONG_UP_MOMENTUM_${priceChange.toFixed(2)}%`);
+      bullishSignals++;
+    } else {
+      signals.push(`STRONG_DOWN_MOMENTUM_${Math.abs(priceChange).toFixed(2)}%`);
+      bearishSignals++;
+    }
   }
 
-  if (currentPrice > currentMA99) {
-    signals.push("PRICE_ABOVE_MA99");
-    bullishSignals++;
-  } else {
-    signals.push("PRICE_BELOW_MA99");
-    bearishSignals++;
-  }
-
-  // Xu hướng MA
-  if (currentMA25 > prevMA25 && currentMA99 > prevMA99) {
-    signals.push("MA_TREND_UP");
-    bullishSignals += 2;
-  } else if (currentMA25 < prevMA25 && currentMA99 < prevMA99) {
-    signals.push("MA_TREND_DOWN");
-    bearishSignals += 2;
-  }
-
-  // Xác định xu hướng
+  // Determine overall trend
   let trend: "BULLISH" | "BEARISH" | "SIDEWAYS" = "SIDEWAYS";
   let strength = 0;
 
-  if (bullishSignals > bearishSignals + 2) {
+  if (bullishSignals > bearishSignals) {
     trend = "BULLISH";
-    strength = Math.min(
-      100,
-      (bullishSignals / (bullishSignals + bearishSignals)) * 100
-    );
-  } else if (bearishSignals > bullishSignals + 2) {
+    strength = bullishSignals / (bullishSignals + bearishSignals);
+  } else if (bearishSignals > bullishSignals) {
     trend = "BEARISH";
-    strength = Math.min(
-      100,
-      (bearishSignals / (bullishSignals + bearishSignals)) * 100
-    );
+    strength = bearishSignals / (bullishSignals + bearishSignals);
   } else {
-    strength = Math.abs(bullishSignals - bearishSignals) * 10;
+    strength = 0.5;
   }
 
-  return { trend, strength: Math.round(strength), signals };
+  return {
+    trend,
+    strength,
+    signals,
+  };
 };
 
-// Phát hiện mô hình giá
-export const detectPricePatterns = (candles: CandleData[]): string[] => {
-  const patterns: string[] = [];
+/* ------------------------- VOLUME ANALYSIS ------------------------- */
+export const calculateVolumeProfile = (
+  candles: CandleData[]
+): VolumeCluster[] => {
+  if (candles.length === 0) return [];
 
-  if (candles.length < 20) return patterns;
+  // Group volume by price levels
+  const priceLevels = new Map<number, number>();
+  const priceStep = 0.001; // Adjust based on asset price
 
-  const recentCandles = candles.slice(-20);
+  candles.forEach((candle) => {
+    const level = Math.round(candle.close / priceStep) * priceStep;
+    priceLevels.set(level, (priceLevels.get(level) || 0) + candle.volume);
+  });
 
-  // Higher Highs / Higher Lows (Uptrend)
-  const highs = recentCandles.map((c) => c.high);
-  const lows = recentCandles.map((c) => c.low);
+  // Convert to array and calculate strength
+  const totalVolume = Array.from(priceLevels.values()).reduce(
+    (sum, vol) => sum + vol,
+    0
+  );
+  const clusters: VolumeCluster[] = Array.from(priceLevels.entries())
+    .map(([priceLevel, volume]) => ({
+      priceLevel,
+      volume,
+      strength: volume / totalVolume,
+    }))
+    .sort((a, b) => b.volume - a.volume)
+    .slice(0, 10); // Top 10 volume clusters
 
-  let higherHighs = true;
-  let higherLows = true;
-  let lowerHighs = true;
-  let lowerLows = true;
+  return clusters;
+};
 
-  for (let i = 2; i < highs.length; i++) {
-    if (highs[i] <= highs[i - 1]) higherHighs = false;
-    if (lows[i] <= lows[i - 1]) higherLows = false;
-    if (highs[i] >= highs[i - 1]) lowerHighs = false;
-    if (lows[i] >= lows[i - 1]) lowerLows = false;
+export const analyzeVolumePattern = (candles: CandleData[]) => {
+  if (candles.length < 20) return null;
+
+  const recentVolumes = candles.slice(-5).map((c) => c.volume);
+  const previousVolumes = candles.slice(-10, -5).map((c) => c.volume);
+
+  const recentAvg =
+    recentVolumes.reduce((a, b) => a + b, 0) / recentVolumes.length;
+  const previousAvg =
+    previousVolumes.reduce((a, b) => a + b, 0) / previousVolumes.length;
+
+  return {
+    volumeChange: ((recentAvg - previousAvg) / previousAvg) * 100,
+    isSpike: recentAvg > previousAvg * 2,
+    trend: recentAvg > previousAvg ? "INCREASING" : "DECREASING",
+  };
+};
+
+/* ------------------------- PATTERN DETECTION ----------------------- */
+export const detectSupportResistance = (
+  candles: CandleData[],
+  lookback: number = 20
+) => {
+  if (candles.length < lookback) return { support: [], resistance: [] };
+
+  const supportLevels: number[] = [];
+  const resistanceLevels: number[] = [];
+
+  for (let i = lookback; i < candles.length; i++) {
+    const window = candles.slice(i - lookback, i);
+    const currentHigh = window[window.length - 1].high;
+    const currentLow = window[window.length - 1].low;
+
+    // Check for resistance (price rejected at high)
+    if (currentHigh === Math.max(...window.map((c) => c.high))) {
+      resistanceLevels.push(currentHigh);
+    }
+
+    // Check for support (price rejected at low)
+    if (currentLow === Math.min(...window.map((c) => c.low))) {
+      supportLevels.push(currentLow);
+    }
   }
 
-  if (higherHighs && higherLows) patterns.push("UPTREND_HH_HL");
-  if (lowerHighs && lowerLows) patterns.push("DOWNTREND_LH_LL");
+  return {
+    support: [...new Set(supportLevels)].sort((a, b) => a - b),
+    resistance: [...new Set(resistanceLevels)].sort((a, b) => a - b),
+  };
+};
 
-  // Support/Resistance
-  const currentClose = recentCandles[recentCandles.length - 1].close;
-  const resistance = Math.max(...highs.slice(-10));
-  const support = Math.min(...lows.slice(-10));
+/* ------------------------- RISK METRICS --------------------------- */
+export const calculateVolatility = (candles: CandleData[]): number => {
+  if (candles.length < 2) return 0;
 
-  if (Math.abs(currentClose - resistance) / resistance < 0.02) {
-    patterns.push("NEAR_RESISTANCE");
+  const returns = [];
+  for (let i = 1; i < candles.length; i++) {
+    const returnVal =
+      (candles[i].close - candles[i - 1].close) / candles[i - 1].close;
+    returns.push(returnVal);
   }
-  if (Math.abs(currentClose - support) / support < 0.02) {
-    patterns.push("NEAR_SUPPORT");
+
+  const mean = returns.reduce((sum, ret) => sum + ret, 0) / returns.length;
+  const variance =
+    returns.reduce((sum, ret) => sum + Math.pow(ret - mean, 2), 0) /
+    returns.length;
+
+  return Math.sqrt(variance) * Math.sqrt(365); // Annualized volatility
+};
+
+export const calculateATR = (
+  candles: CandleData[],
+  period: number = 14
+): number => {
+  if (candles.length < period) return 0;
+
+  const trueRanges = [];
+  for (let i = 1; i < candles.length; i++) {
+    const highLow = candles[i].high - candles[i].low;
+    const highClose = Math.abs(candles[i].high - candles[i - 1].close);
+    const lowClose = Math.abs(candles[i].low - candles[i - 1].close);
+    trueRanges.push(Math.max(highLow, highClose, lowClose));
   }
 
-  return patterns;
+  return trueRanges.slice(-period).reduce((sum, tr) => sum + tr, 0) / period;
 };

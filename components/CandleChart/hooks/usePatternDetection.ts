@@ -11,99 +11,46 @@ interface CandleData {
   close: number;
   volume?: number;
 }
+const REVERSAL_MARKER_CONFIG = {
+  // Bullish Reversal Markers
+  BULLISH_REVERSAL: {
+    position: "belowBar" as const,
+    color: "#00D26A", // Xanh lá đậm
+    shape: "arrowUp" as const,
+    size: 1.8,
+  },
 
+  BEARISH_REVERSAL: {
+    position: "aboveBar" as const,
+    color: "#ad2273ff", // Đỏ hồng
+    shape: "arrowDown" as const,
+    size: 1.8,
+  },
+
+  // Continuation Markers
+  BULLISH_CONTINUATION: {
+    position: "belowBar" as const,
+    color: "#4ECDC4", // Xanh lá nhạt
+    shape: "circle" as const,
+    size: 1.3,
+  },
+
+  BEARISH_CONTINUATION: {
+    position: "aboveBar" as const,
+    color: "#FF6B6B", // Đỏ cam
+    shape: "circle" as const,
+    size: 1.3,
+  },
+
+  // Neutral/Pattern Markers
+  NEUTRAL: {
+    position: "inBar" as const,
+    color: "#888888",
+    shape: "square" as const,
+    size: 1,
+  },
+};
 export function usePatternDetection(activeFilters: ActiveFilters) {
-  const detectPatterns = useCallback(
-    (candles: CandleData[]): SeriesMarker<UTCTimestamp>[] => {
-      const markers: SeriesMarker<UTCTimestamp>[] = [];
-
-      for (let i = 2; i < candles.length; i++) {
-        const prev = candles[i - 1];
-        const current = candles[i];
-
-        if (
-          activeFilters["Bullish Engulfing"] &&
-          current.close > current.open &&
-          prev.close < prev.open &&
-          current.close > prev.open &&
-          current.open < prev.close
-        ) {
-          markers.push({
-            time: current.time,
-            position: "belowBar",
-            color: "#00a67d",
-            shape: "arrowUp",
-            text: "Bull Engulf",
-          });
-        }
-
-        if (
-          activeFilters["Bearish Engulfing"] &&
-          current.close < current.open &&
-          prev.close > prev.open &&
-          current.open > prev.close &&
-          current.close < prev.open
-        ) {
-          markers.push({
-            time: current.time,
-            position: "aboveBar",
-            color: "#eb4d5c",
-            shape: "arrowDown",
-            text: "Bear Engulf",
-          });
-        }
-
-        if (activeFilters["Doji"]) {
-          const body = Math.abs(current.close - current.open);
-          const range = current.high - current.low;
-          if (range > 0 && body / range < 0.1) {
-            markers.push({
-              time: current.time,
-              position: "aboveBar",
-              color: "#2196f3",
-              shape: "circle",
-              text: "Doji",
-            });
-          }
-        }
-
-        if (activeFilters["SMC"]) {
-          for (let i = 4; i < candles.length; i++) {
-            const current = candles[i];
-            const prev1 = candles[i - 1];
-            const prev2 = candles[i - 2];
-
-            // ✅ CHECK: Đảm bảo volume tồn tại
-            if (current.volume === undefined || prev1.volume === undefined) {
-              continue; // Bỏ qua nếu không có volume data
-            }
-
-            // Simple SMC pattern logic
-            const isSMCPattern =
-              current.volume > prev1.volume * 1.5 && // Volume spike
-              Math.abs(current.close - current.open) /
-                (current.high - current.low) <
-                0.3 && // Small body
-              current.high - current.low > prev1.high - prev1.low; // Increased range
-
-            if (isSMCPattern) {
-              markers.push({
-                time: current.time,
-                position: "aboveBar",
-                color: "#a46bffff",
-                shape: "circle",
-                text: "SMC",
-              });
-            }
-          }
-        }
-      }
-
-      return markers;
-    },
-    [activeFilters]
-  );
-
   const predictPatterns = useCallback(
     (
       candles: CandleData[]
@@ -123,7 +70,6 @@ export function usePatternDetection(activeFilters: ActiveFilters) {
       const highs = recentCandles.map((c) => c.high);
       const lows = recentCandles.map((c) => c.low);
       const volumes = recentCandles.map((c) => c.volume || 0);
-
       // SMA calculations
       const sma9 = prices.slice(-9).reduce((a, b) => a + b, 0) / 9;
       const sma20 = prices.reduce((a, b) => a + b, 0) / prices.length;
@@ -189,7 +135,14 @@ export function usePatternDetection(activeFilters: ActiveFilters) {
         swingHighs.length > 0 ? Math.max(...swingHighs) : Math.max(...highs);
       const dynamicSupport =
         swingLows.length > 0 ? Math.min(...swingLows) : Math.min(...lows);
-
+      if (activeFilters["Reversal Prediction"]) {
+        const reversalMarkers = createReversalMarkers(
+          candles,
+          dynamicSupport,
+          dynamicResistance
+        );
+        markers.push(...reversalMarkers);
+      }
       // Key resistance và support levels
       const resistanceLevel = dynamicResistance;
       const supportLevel = dynamicSupport;
@@ -362,7 +315,47 @@ export function usePatternDetection(activeFilters: ActiveFilters) {
 
       // Add prediction markers
       const lastCandleTime = recentCandles[recentCandles.length - 1].time;
+      if (
+        activeFilters["Bull Prediction"] &&
+        predictionDirection === "BULLISH"
+      ) {
+        const isReversal = pattern.includes("REVERSAL");
+        const markerConfig = isReversal
+          ? REVERSAL_MARKER_CONFIG.BULLISH_REVERSAL
+          : REVERSAL_MARKER_CONFIG.BULLISH_CONTINUATION;
 
+        markers.push({
+          time: lastCandleTime,
+          position: markerConfig.position,
+          color: markerConfig.color,
+          shape: markerConfig.shape,
+          size: markerConfig.size,
+          text: isReversal
+            ? `BULL-REV↑ ${confidence}%`
+            : `BULL→ ${confidence}%`,
+        });
+      }
+
+      if (
+        activeFilters["Bear Prediction"] &&
+        predictionDirection === "BEARISH"
+      ) {
+        const isReversal = pattern.includes("REVERSAL");
+        const markerConfig = isReversal
+          ? REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL
+          : REVERSAL_MARKER_CONFIG.BEARISH_CONTINUATION;
+
+        markers.push({
+          time: lastCandleTime,
+          position: markerConfig.position,
+          color: markerConfig.color,
+          shape: markerConfig.shape,
+          size: markerConfig.size,
+          text: isReversal
+            ? `BEAR-REV↓ ${confidence}%`
+            : `BEAR→ ${confidence}%`,
+        });
+      }
       // Hiển thị support/resistance markers
       if (
         activeFilters["Bull Prediction"] ||
@@ -518,6 +511,7 @@ export function usePatternDetection(activeFilters: ActiveFilters) {
 
       const swingHighs: number[] = [];
       const swingLows: number[] = [];
+      const usedTimes = new Set<number>();
 
       for (let i = 3; i < candles.length - 3; i++) {
         const currentHigh = candles[i].high;
@@ -541,7 +535,7 @@ export function usePatternDetection(activeFilters: ActiveFilters) {
           swingLows.push(i);
         }
       }
-
+      // 🎯 DOUBLE TOP - BEARISH REVERSAL
       if (activeFilters["Double Top"] && swingHighs.length >= 2) {
         const lastTwoHighs = swingHighs.slice(-2);
         const firstHigh = candles[lastTwoHighs[0]];
@@ -549,46 +543,120 @@ export function usePatternDetection(activeFilters: ActiveFilters) {
 
         const priceDiff =
           Math.abs(firstHigh.high - secondHigh.high) / firstHigh.high;
-        if (priceDiff < 0.02) {
+        if (priceDiff < 0.02 && !usedTimes.has(secondHigh.time)) {
           markers.push({
             time: secondHigh.time,
-            position: "aboveBar",
-            color: "#ff6b6b",
-            shape: "arrowDown",
-            text: "Double Top",
+            position: REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL.position,
+            color: REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL.color,
+            shape: "circle",
+            size: 1.8,
+            text: "D-TOP↓",
           });
+          usedTimes.add(secondHigh.time);
         }
       }
 
+      // 🎯 DOUBLE BOTTOM - BULLISH REVERSAL
       if (activeFilters["Double Bottom"] && swingLows.length >= 2) {
         const lastTwoLows = swingLows.slice(-2);
         const firstLow = candles[lastTwoLows[0]];
         const secondLow = candles[lastTwoLows[1]];
 
         const priceDiff = Math.abs(firstLow.low - secondLow.low) / firstLow.low;
-        if (priceDiff < 0.02) {
+        if (priceDiff < 0.02 && !usedTimes.has(secondLow.time)) {
           markers.push({
             time: secondLow.time,
-            position: "belowBar",
-            color: "#51cf66",
-            shape: "arrowUp",
-            text: "Double Bottom",
+            position: REVERSAL_MARKER_CONFIG.BULLISH_REVERSAL.position,
+            color: REVERSAL_MARKER_CONFIG.BULLISH_REVERSAL.color,
+            shape: "circle",
+            size: 1.8,
+            text: "D-BOT↑",
           });
+          usedTimes.add(secondLow.time);
         }
       }
 
+      // 🎯 HEAD & SHOULDERS - BEARISH REVERSAL
       if (activeFilters["Head & Shoulders"] && swingHighs.length >= 3) {
         const lastThreeHighs = swingHighs.slice(-3);
         const [left, head, right] = lastThreeHighs.map((idx) => candles[idx]);
 
-        if (head.high > left.high && head.high > right.high) {
+        if (
+          head.high > left.high &&
+          head.high > right.high &&
+          !usedTimes.has(right.time)
+        ) {
           markers.push({
             time: right.time,
-            position: "aboveBar",
-            color: "#ffa8a8",
-            shape: "arrowDown",
-            text: "H&S",
+            position: REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL.position,
+            color: "#FF6B9D",
+            shape: "circle",
+            size: 2.0,
+            text: "H&S↓",
           });
+          usedTimes.add(right.time);
+        }
+      }
+      // 🎯 DOUBLE TOP - BEARISH REVERSAL
+      if (activeFilters["Double Top"] && swingHighs.length >= 2) {
+        const lastTwoHighs = swingHighs.slice(-2);
+        const firstHigh = candles[lastTwoHighs[0]];
+        const secondHigh = candles[lastTwoHighs[1]];
+
+        const priceDiff =
+          Math.abs(firstHigh.high - secondHigh.high) / firstHigh.high;
+        if (priceDiff < 0.02 && !usedTimes.has(secondHigh.time)) {
+          markers.push({
+            time: secondHigh.time,
+            position: REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL.position,
+            color: REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL.color,
+            shape: "circle",
+            size: 1.8,
+            text: "D-TOP↓",
+          });
+          usedTimes.add(secondHigh.time);
+        }
+      }
+
+      // 🎯 DOUBLE BOTTOM - BULLISH REVERSAL
+      if (activeFilters["Double Bottom"] && swingLows.length >= 2) {
+        const lastTwoLows = swingLows.slice(-2);
+        const firstLow = candles[lastTwoLows[0]];
+        const secondLow = candles[lastTwoLows[1]];
+
+        const priceDiff = Math.abs(firstLow.low - secondLow.low) / firstLow.low;
+        if (priceDiff < 0.02 && !usedTimes.has(secondLow.time)) {
+          markers.push({
+            time: secondLow.time,
+            position: REVERSAL_MARKER_CONFIG.BULLISH_REVERSAL.position,
+            color: REVERSAL_MARKER_CONFIG.BULLISH_REVERSAL.color,
+            shape: "circle",
+            size: 1.8,
+            text: "D-BOT↑",
+          });
+          usedTimes.add(secondLow.time);
+        }
+      }
+
+      // 🎯 HEAD & SHOULDERS - BEARISH REVERSAL
+      if (activeFilters["Head & Shoulders"] && swingHighs.length >= 3) {
+        const lastThreeHighs = swingHighs.slice(-3);
+        const [left, head, right] = lastThreeHighs.map((idx) => candles[idx]);
+
+        if (
+          head.high > left.high &&
+          head.high > right.high &&
+          !usedTimes.has(right.time)
+        ) {
+          markers.push({
+            time: right.time,
+            position: REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL.position,
+            color: "#FF6B9D",
+            shape: "circle",
+            size: 2.0,
+            text: "H&S↓",
+          });
+          usedTimes.add(right.time);
         }
       }
 
@@ -598,121 +666,343 @@ export function usePatternDetection(activeFilters: ActiveFilters) {
   );
   // Trong hooks/usePatternDetection.ts - cải tiến predictPatterns function
 
-  const detectReversalPatterns = (
+  const detectReversalPatterns = useCallback(
+    (
+      candles: CandleData[],
+      currentPrice: number,
+      support: number,
+      resistance: number
+    ): {
+      pattern: string;
+      confidence: number;
+      signals: string[];
+      direction: "UP" | "DOWN";
+    } => {
+      const signals: string[] = [];
+      let confidence = 0;
+      let pattern = "NO_REVERSAL";
+      let direction: "UP" | "DOWN" = "UP";
+
+      if (candles.length < 5)
+        return { pattern, confidence, signals, direction };
+
+      const recentCandles = candles.slice(-5);
+      const current = recentCandles[recentCandles.length - 1];
+      const prev = recentCandles[recentCandles.length - 2];
+
+      // 🎯 BULLISH REVERSAL SIGNALS
+      const bullishSignals: string[] = [];
+      let bullishConfidence = 0;
+
+      // 1. SUPPORT BOUNCE REVERSAL
+      if (current.low <= support * 1.01 && current.close > current.open) {
+        bullishSignals.push("SUPPORT_BOUNCE");
+        bullishConfidence += 25;
+      }
+
+      // 2. HAMMER PATTERN tại support
+      const hammerBody = Math.abs(current.close - current.open);
+      const hammerRange = current.high - current.low;
+      const lowerShadow = Math.min(current.open, current.close) - current.low;
+
+      if (
+        hammerRange > 0 &&
+        lowerShadow >= 2 * hammerBody &&
+        current.low <= support * 1.01 &&
+        current.close > current.open
+      ) {
+        bullishSignals.push("HAMMER_AT_SUPPORT");
+        bullishConfidence += 30;
+      }
+
+      // 3. BULLISH ENGULFING tại support
+      if (
+        current.close > current.open &&
+        prev.close < prev.open &&
+        current.close > prev.open &&
+        current.open < prev.close &&
+        current.low <= support * 1.01
+      ) {
+        bullishSignals.push("ENGULFING_AT_SUPPORT");
+        bullishConfidence += 35;
+      }
+
+      // 4. BULLISH RSI DIVERGENCE
+      const rsiDivergence = detectRSIDivergence(candles);
+      if (rsiDivergence === "BULLISH") {
+        bullishSignals.push("RSI_BULLISH_DIVERGENCE");
+        bullishConfidence += 40;
+      }
+
+      // 5. DOUBLE BOTTOM
+      const doublePattern = detectDoubleTopBottom(candles);
+      if (doublePattern === "DOUBLE_BOTTOM") {
+        bullishSignals.push("DOUBLE_BOTTOM");
+        bullishConfidence += 35;
+      }
+
+      // 🎯 BEARISH REVERSAL SIGNALS
+      const bearishSignals: string[] = [];
+      let bearishConfidence = 0;
+
+      // 1. RESISTANCE REJECTION
+      if (current.high >= resistance * 0.99 && current.close < current.open) {
+        bearishSignals.push("RESISTANCE_REJECTION");
+        bearishConfidence += 25;
+      }
+
+      // 2. SHOOTING STAR tại resistance
+      const upperShadow = current.high - Math.max(current.open, current.close);
+      if (
+        hammerRange > 0 &&
+        upperShadow >= 2 * hammerBody &&
+        current.high >= resistance * 0.99 &&
+        current.close < current.open
+      ) {
+        bearishSignals.push("SHOOTING_STAR_AT_RESISTANCE");
+        bearishConfidence += 30;
+      }
+
+      // 3. BEARISH ENGULFING tại resistance
+      if (
+        current.close < current.open &&
+        prev.close > prev.open &&
+        current.open > prev.close &&
+        current.close < prev.open &&
+        current.high >= resistance * 0.99
+      ) {
+        bearishSignals.push("ENGULFING_AT_RESISTANCE");
+        bearishConfidence += 35;
+      }
+
+      // 4. BEARISH RSI DIVERGENCE
+      if (rsiDivergence === "BEARISH") {
+        bearishSignals.push("RSI_BEARISH_DIVERGENCE");
+        bearishConfidence += 40;
+      }
+
+      // 5. DOUBLE TOP
+      if (doublePattern === "DOUBLE_TOP") {
+        bearishSignals.push("DOUBLE_TOP");
+        bearishConfidence += 35;
+      }
+
+      // 🎯 QUYẾT ĐỊNH REVERSAL DIRECTION
+      if (bullishConfidence > bearishConfidence && bullishConfidence > 30) {
+        pattern = "BULLISH_REVERSAL";
+        confidence = Math.min(bullishConfidence, 95);
+        signals.push(...bullishSignals);
+        direction = "UP";
+      } else if (
+        bearishConfidence > bullishConfidence &&
+        bearishConfidence > 30
+      ) {
+        pattern = "BEARISH_REVERSAL";
+        confidence = Math.min(bearishConfidence, 95);
+        signals.push(...bearishSignals);
+        direction = "DOWN";
+      }
+
+      return { pattern, confidence, signals, direction };
+    },
+    []
+  );
+
+  // 🆕 HÀM TẠO REVERSAL MARKERS
+  const createReversalMarkers = useCallback(
+    (
+      candles: CandleData[],
+      support: number,
+      resistance: number
+    ): SeriesMarker<UTCTimestamp>[] => {
+      const markers: SeriesMarker<UTCTimestamp>[] = [];
+      if (candles.length < 5) return markers;
+
+      const currentPrice = candles[candles.length - 1].close;
+      const reversalData = detectReversalPatterns(
+        candles,
+        currentPrice,
+        support,
+        resistance
+      );
+
+      if (reversalData.pattern === "NO_REVERSAL") return markers;
+
+      const currentTime = candles[candles.length - 1].time;
+      const isBullish = reversalData.direction === "UP";
+
+      if (isBullish) {
+        markers.push({
+          time: currentTime,
+          position: REVERSAL_MARKER_CONFIG.BULLISH_REVERSAL.position,
+          color: REVERSAL_MARKER_CONFIG.BULLISH_REVERSAL.color,
+          shape: REVERSAL_MARKER_CONFIG.BULLISH_REVERSAL.shape,
+          size: REVERSAL_MARKER_CONFIG.BULLISH_REVERSAL.size,
+          text: `REV↑ ${reversalData.confidence}%`,
+        });
+      } else {
+        markers.push({
+          time: currentTime,
+          position: REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL.position,
+          color: REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL.color,
+          shape: REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL.shape,
+          size: REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL.size,
+          text: `REV↓ ${reversalData.confidence}%`,
+        });
+      }
+
+      return markers;
+    },
+    [detectReversalPatterns]
+  );
+
+  const detectPatterns = useCallback(
+    (candles: CandleData[]): SeriesMarker<UTCTimestamp>[] => {
+      const markers: SeriesMarker<UTCTimestamp>[] = [];
+      const usedTimes = new Set<number>();
+
+      for (let i = 2; i < candles.length; i++) {
+        const prev = candles[i - 1];
+        const current = candles[i];
+
+        if (usedTimes.has(current.time)) continue;
+
+        // 🎯 BULLISH ENGULFING - REVERSAL UP
+        if (
+          activeFilters["Bullish Engulfing"] &&
+          current.close > current.open &&
+          prev.close < prev.open &&
+          current.close > prev.open &&
+          current.open < prev.close
+        ) {
+          markers.push({
+            time: current.time,
+            position: REVERSAL_MARKER_CONFIG.BULLISH_REVERSAL.position,
+            color: REVERSAL_MARKER_CONFIG.BULLISH_REVERSAL.color,
+            shape: REVERSAL_MARKER_CONFIG.BULLISH_REVERSAL.shape,
+            size: REVERSAL_MARKER_CONFIG.BULLISH_REVERSAL.size,
+            text: "ENG↑",
+          });
+          usedTimes.add(current.time);
+          continue;
+        }
+
+        // 🎯 BEARISH ENGULFING - REVERSAL DOWN
+        if (
+          activeFilters["Bearish Engulfing"] &&
+          current.close < current.open &&
+          prev.close > prev.open &&
+          current.open > prev.close &&
+          current.close < prev.open
+        ) {
+          markers.push({
+            time: current.time,
+            position: REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL.position,
+            color: REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL.color,
+            shape: REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL.shape,
+            size: REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL.size,
+            text: "ENG↓",
+          });
+          usedTimes.add(current.time);
+          continue;
+        }
+
+        // 🎯 DOJI với context
+        if (activeFilters["Doji"]) {
+          const body = Math.abs(current.close - current.open);
+          const range = current.high - current.low;
+          if (range > 0 && body / range < 0.1) {
+            const dojiContext = getDojiContext(candles, i);
+
+            // 🎯 PHÂN BIỆT RÕ RÀNG 3 LOẠI DOJI
+            switch (dojiContext) {
+              case "bullish":
+                markers.push({
+                  time: current.time,
+                  position: REVERSAL_MARKER_CONFIG.BULLISH_REVERSAL.position, // belowBar
+                  color: REVERSAL_MARKER_CONFIG.BULLISH_REVERSAL.color, // #00D26A (xanh lá)
+                  shape: REVERSAL_MARKER_CONFIG.BULLISH_REVERSAL.shape, // arrowUp
+                  size: REVERSAL_MARKER_CONFIG.BULLISH_REVERSAL.size, // 1.8
+                  text: "DOJI↑", // Bullish reversal
+                });
+                break;
+
+              case "bearish":
+                markers.push({
+                  time: current.time,
+                  position: REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL.position, // aboveBar
+                  color: REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL.color, // #6b3c54ff (đỏ hồng)
+                  shape: REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL.shape, // arrowDown
+                  size: REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL.size, // 1.8
+                  text: "DOJI↓", // Bearish reversal
+                });
+                break;
+
+              default:
+                markers.push({
+                  time: current.time,
+                  position: REVERSAL_MARKER_CONFIG.NEUTRAL.position, // inBar
+                  color: REVERSAL_MARKER_CONFIG.NEUTRAL.color, // #888888 (xám)
+                  shape: REVERSAL_MARKER_CONFIG.NEUTRAL.shape, // square
+                  size: REVERSAL_MARKER_CONFIG.NEUTRAL.size, // 1
+                  text: "DOJI", // Neutral
+                });
+            }
+
+            usedTimes.add(current.time);
+            continue;
+          }
+        }
+
+        // 🎯 SMC PATTERNS
+        if (activeFilters["SMC"] && i >= 4) {
+          const prev1 = candles[i - 1];
+          const prev2 = candles[i - 2];
+
+          if (current.volume === undefined || prev1.volume === undefined) {
+            continue;
+          }
+
+          const isSMCPattern =
+            current.volume > prev1.volume * 1.5 &&
+            Math.abs(current.close - current.open) /
+              (current.high - current.low) <
+              0.3 &&
+            current.high - current.low > prev1.high - prev1.low;
+
+          if (isSMCPattern) {
+            markers.push({
+              time: current.time,
+              position: "aboveBar",
+              color: "#a46bffff",
+              shape: "circle",
+              text: "SMC",
+            });
+            usedTimes.add(current.time);
+            continue;
+          }
+        }
+      }
+
+      return markers;
+    },
+    [activeFilters]
+  );
+
+  // 🆕 HÀM XÁC ĐỊNH DOJI CONTEXT
+  const getDojiContext = (
     candles: CandleData[],
-    currentPrice: number,
-    support: number,
-    resistance: number
-  ): { pattern: string; confidence: number; signals: string[] } => {
-    const signals: string[] = [];
-    let confidence = 0;
-    let pattern = "NO_REVERSAL";
+    index: number
+  ): "bullish" | "bearish" | "neutral" => {
+    if (index < 2) return "neutral";
 
-    if (candles.length < 5) return { pattern, confidence, signals };
+    const prevTrend = candles[index - 1].close - candles[index - 2].close;
+    const currentClose = candles[index].close;
+    const prevClose = candles[index - 1].close;
 
-    const recentCandles = candles.slice(-5);
-    const current = recentCandles[recentCandles.length - 1];
-    const prev = recentCandles[recentCandles.length - 2];
-
-    // 1. SUPPORT BOUNCE REVERSAL (Bullish)
-    if (current.low <= support * 1.01 && current.close > current.open) {
-      signals.push("SUPPORT_BOUNCE");
-      confidence += 25;
-
-      // Tăng confidence nếu có volume confirmation
-      if (current.volume && prev.volume && current.volume > prev.volume * 1.2) {
-        signals.push("VOLUME_CONFIRMATION");
-        confidence += 15;
-      }
-    }
-
-    // 2. RESISTANCE REJECTION REVERSAL (Bearish)
-    if (current.high >= resistance * 0.99 && current.close < current.open) {
-      signals.push("RESISTANCE_REJECTION");
-      confidence += 25;
-
-      if (current.volume && prev.volume && current.volume > prev.volume * 1.2) {
-        signals.push("VOLUME_CONFIRMATION");
-        confidence += 15;
-      }
-    }
-
-    // 3. HAMMER PATTERN (Bullish Reversal)
-    const hammerBody = Math.abs(current.close - current.open);
-    const hammerRange = current.high - current.low;
-    const lowerShadow = Math.min(current.open, current.close) - current.low;
-    const upperShadow = current.high - Math.max(current.open, current.close);
-
-    if (
-      hammerRange > 0 &&
-      lowerShadow >= 2 * hammerBody &&
-      upperShadow <= hammerBody * 0.5 &&
-      current.close > current.open
-    ) {
-      signals.push("HAMMER_PATTERN");
-      confidence += 30;
-      pattern = "BULLISH_HAMMER_REVERSAL";
-    }
-
-    // 4. SHOOTING STAR (Bearish Reversal)
-    if (
-      hammerRange > 0 &&
-      upperShadow >= 2 * hammerBody &&
-      lowerShadow <= hammerBody * 0.5 &&
-      current.close < current.open
-    ) {
-      signals.push("SHOOTING_STAR");
-      confidence += 30;
-      pattern = "BEARISH_SHOOTING_STAR_REVERSAL";
-    }
-
-    // 5. BULLISH ENGULFING tại support
-    if (
-      current.close > current.open &&
-      prev.close < prev.open &&
-      current.close > prev.open &&
-      current.open < prev.close &&
-      current.low <= support * 1.01
-    ) {
-      signals.push("BULLISH_ENGULFING_AT_SUPPORT");
-      confidence += 35;
-      pattern = "BULLISH_ENGULFING_REVERSAL";
-    }
-
-    // 6. BEARISH ENGULFING tại resistance
-    if (
-      current.close < current.open &&
-      prev.close > prev.open &&
-      current.open > prev.close &&
-      current.close < prev.open &&
-      current.high >= resistance * 0.99
-    ) {
-      signals.push("BEARISH_ENGULFING_AT_RESISTANCE");
-      confidence += 35;
-      pattern = "BEARISH_ENGULFING_REVERSAL";
-    }
-
-    // 7. RSI DIVERGENCE (Mạnh nhất)
-    const rsiDivergence = detectRSIDivergence(candles);
-    if (rsiDivergence !== "NO_DIVERGENCE") {
-      signals.push(`RSI_${rsiDivergence}_DIVERGENCE`);
-      confidence += 40;
-      pattern = `${rsiDivergence}_DIVERGENCE_REVERSAL`;
-    }
-
-    // 8. DOUBLE TOP/BOTTOM
-    const doublePattern = detectDoubleTopBottom(candles);
-    if (doublePattern !== "NO_PATTERN") {
-      signals.push(doublePattern);
-      confidence += 35;
-      pattern = `${doublePattern}_REVERSAL`;
-    }
-
-    return {
-      pattern: confidence > 0 ? pattern : "NO_REVERSAL",
-      confidence: Math.min(confidence, 95),
-      signals,
-    };
+    if (prevTrend < 0 && currentClose > prevClose) return "bullish"; // Reversal up
+    if (prevTrend > 0 && currentClose < prevClose) return "bearish"; // Reversal down
+    return "neutral";
   };
 
   // Hàm phát hiện RSI Divergence
@@ -758,9 +1048,6 @@ export function usePatternDetection(activeFilters: ActiveFilters) {
     const highs = recent.map((c) => c.high);
     const lows = recent.map((c) => c.low);
 
-    const maxHigh = Math.max(...highs);
-    const minLow = Math.min(...lows);
-
     // Tìm các swing highs
     const swingHighs = [];
     for (let i = 2; i < highs.length - 2; i++) {
@@ -793,7 +1080,6 @@ export function usePatternDetection(activeFilters: ActiveFilters) {
       const diff =
         Math.abs(lastTwoHighs[0] - lastTwoHighs[1]) / lastTwoHighs[0];
       if (diff < 0.02) {
-        // Chênh lệch < 2%
         return "DOUBLE_TOP";
       }
     }
@@ -803,13 +1089,13 @@ export function usePatternDetection(activeFilters: ActiveFilters) {
       const lastTwoLows = swingLows.slice(-2);
       const diff = Math.abs(lastTwoLows[0] - lastTwoLows[1]) / lastTwoLows[0];
       if (diff < 0.02) {
-        // Chênh lệch < 2%
         return "DOUBLE_BOTTOM";
       }
     }
 
     return "NO_PATTERN";
   };
+
   return {
     detectPatterns,
     predictPatterns,

@@ -12,6 +12,22 @@ export function RiskPanel({
   isVisible,
   setIsVisible,
 }: RiskPanelProps) {
+  // ✅ Hàm helper để đảm bảo flags là array
+  const getFlagsArray = (flags: string | string[] | undefined): string[] => {
+    if (!flags) return [];
+    if (Array.isArray(flags)) return flags;
+    return [flags];
+  };
+
+  // ✅ Lấy flags cho candle hiện tại
+  const currentFlags = getFlagsArray(riskData.flagsMap[riskData.latest.time]);
+
+  // ✅ Tính prediction score
+  const predictionScore = calculatePredictionScore(
+    riskData.latest,
+    currentFlags
+  );
+
   return (
     <div
       style={{
@@ -56,21 +72,12 @@ export function RiskPanel({
             style={{
               padding: "4px 12px",
               borderRadius: 20,
-              background:
-                calculatePredictionScore(
-                  riskData.latest,
-                  riskData.flagsMap[riskData.latest.time] || []
-                ) >= 60
-                  ? "#4caf50"
-                  : "#f44336",
+              background: predictionScore >= 60 ? "#4caf50" : "#f44336",
               color: "white",
               fontWeight: "bold",
             }}
           >
-            {calculatePredictionScore(
-              riskData.latest,
-              riskData.flagsMap[riskData.latest.time] || []
-            )}
+            {predictionScore}
           </span>
         </div>
 
@@ -110,23 +117,27 @@ export function RiskPanel({
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             {Object.entries(riskData.flagsMap)
               .slice(-8)
-              .map(([time, flags]) => (
-                <div
-                  key={time}
-                  style={{
-                    padding: "4px 8px",
-                    backgroundColor: "#e3f2fd",
-                    borderRadius: 4,
-                    fontSize: 12,
-                    color: "#1565c0",
-                  }}
-                >
-                  <small>
-                    {new Date(Number(time) * 1000).toLocaleString()}:
-                  </small>{" "}
-                  {flags.join(", ")}
-                </div>
-              ))}
+              .map(([time, flags]) => {
+                // ✅ Đảm bảo flags luôn là array khi hiển thị
+                const displayFlags = getFlagsArray(flags);
+                return (
+                  <div
+                    key={time}
+                    style={{
+                      padding: "4px 8px",
+                      backgroundColor: "#e3f2fd",
+                      borderRadius: 4,
+                      fontSize: 12,
+                      color: "#1565c0",
+                    }}
+                  >
+                    <small>
+                      {new Date(Number(time) * 1000).toLocaleString()}:
+                    </small>{" "}
+                    {displayFlags.join(", ")}
+                  </div>
+                );
+              })}
           </div>
         </div>
       )}

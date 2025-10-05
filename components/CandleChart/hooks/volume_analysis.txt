@@ -1,0 +1,407 @@
+import { useCallback } from "react";
+import { SeriesMarker, UTCTimestamp } from "lightweight-charts";
+import { Prediction, ActiveFilters } from "../types";
+import { PREDICTION_CONFIGS } from "../constants";
+
+interface CandleData {
+  time: UTCTimestamp;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number;
+}
+
+const REVERSAL_MARKER_CONFIG = {
+  // Bullish Reversal Markers
+  BULLISH_REVERSAL: {
+    position: "belowBar" as const,
+    color: "#00D26A",
+    shape: "arrowUp" as const,
+    size: 1.8,
+  },
+
+  BEARISH_REVERSAL: {
+    position: "aboveBar" as const,
+    color: "#FF0080",
+    shape: "arrowDown" as const,
+    size: 1.8,
+  },
+
+  // Volume-based Markers
+  HIGH_VOLUME: {
+    position: "inBar" as const,
+    color: "#FFA726",
+    shape: "circle" as const,
+    size: 1.5,
+  },
+
+  VOLUME_SPIKE: {
+    position: "inBar" as const,
+    color: "#FF5722",
+    shape: "triangleUp" as const,
+    size: 1.8,
+  },
+
+  // Neutral/Pattern Markers
+  NEUTRAL: {
+    position: "inBar" as const,
+    color: "#888888",
+    shape: "square" as const,
+    size: 1,
+  },
+};
+
+export function usePatternDetection(activeFilters: ActiveFilters) {
+  // 🆕 HÀM PHÂN TÍCH VOLUME
+  const analyzeVolume = useCallback((candles: CandleData[], currentIndex: number) => {
+    if (candles.length < 10) return { isVolumeSpike: false, volumeRatio: 1, avgVolume: 0 };
+
+    const currentVolume = candles[currentIndex].volume || 0;
+    
+    // Tính volume trung bình 10 candles trước đó
+    const startIndex = Math.max(0, currentIndex - 10);
+    const volumeData = candles.slice(startIndex, currentIndex).map(c => c.volume || 0);
+    const avgVolume = volumeData.reduce((sum, vol) => sum + vol, 0) / volumeData.length;
+    
+    const volumeRatio = avgVolume > 0 ? currentVolume / avgVolume : 1;
+    const isVolumeSpike = volumeRatio > 2.0; // Volume tăng 100%+
+    const isHighVolume = volumeRatio > 1.5;  // Volume tăng 50%+
+
+    return { isVolumeSpike, isHighVolume, volumeRatio, avgVolume, currentVolume };
+  }, []);
+
+  // 🆕 HÀM TẠO VOLUME MARKERS
+  const createVolumeMarkers = useCallback((candles: CandleData[], currentIndex: number): SeriesMarker<UTCTimestamp>[] => {
+    const markers: SeriesMarker<UTCTimestamp>[] = [];
+    const volumeAnalysis = analyzeVolume(candles, currentIndex);
+    const currentCandle = candles[currentIndex];
+
+    if (activeFilters["LIQ"] && volumeAnalysis.isVolumeSpike) {
+      markers.push({
+        time: currentCandle.time,
+        position: REVERSAL_MARKER_CONFIG.VOLUME_SPIKE.position,
+        color: REVERSAL_MARKER_CONFIG.VOLUME_SPIKE.color,
+        shape: REVERSAL_MARKER_CONFIG.VOLUME_SPIKE.shape,
+        size: REVERSAL_MARKER_CONFIG.VOLUME_SPIKE.size,
+        text: `VOL↑ ${volumeAnalysis.volumeRatio.toFixed(1)}x`,
+      });
+    }
+
+    if (activeFilters["SHOCK"] && volumeAnalysis.isHighVolume) {
+      const priceChange = ((currentCandle.close - currentCandle.open) / currentCandle.open) * 100;
+      if (Math.abs(priceChange) > 3) { // Price change > 3%
+        markers.push({
+          time: currentCandle.time,
+          position: REVERSAL_MARKER_CONFIG.HIGH_VOLUME.position,
+          color: REVERSAL_MARKER_CONFIG.HIGH_VOLUME.color,
+          shape: REVERSAL_MARKER_CONFIG.HIGH_VOLUME.shape,
+          size: REVERSAL_MARKER_CONFIG.HIGH_VOLUME.size,
+          text: `SHOCK ${priceChange.toFixed(1)}%`,
+        });
+      }
+    }
+
+    return markers;
+  }, [activeFilters, analyzeVolume]);
+
+  // 🆕 HÀM PHÁT HIỆN VOLUME DIVERGENCE
+  const detectVolumeDivergence = useCallback((candles: CandleData[], currentIndex: number): string => {
+    if (candles.length < 5) return "NO_DIVERGENCE";
+
+    const current = candles[currentIndex];
+    const prev = candles[currentIndex - 1];
+    
+    if (!current.volume || !prev.volume) return "NO_DIVERGENCE";
+
+    const currentPriceChange = ((current.close - prev.close) / prev.close) * 100;
+    const volumeChange = ((current.volume - prev.volume) / prev.volume) * 100;
+
+    // Bullish Volume Divergence: Price down nhưng volume up
+    if (currentPriceChange < -1 && volumeChange > 50) {
+      return "BULLISH_VOL_DIVERGENCE";
+    }
+
+    // Bearish Volume Divergence: Price up nhưng volume down
+    if (currentPriceChange > 1 && volumeChange < -30) {
+      return "BEARISH_VOL_DIVERGENCE";
+    }
+
+    return "NO_DIVERGENCE";
+  }, []);
+
+  const detectPatterns = useCallback(
+    (candles: CandleData[]): SeriesMarker<UTCTimestamp>[] => {
+      const markers: SeriesMarker<UTCTimestamp>[] = [];
+      const usedTimes = new Set<number>();
+
+      for (let i = 2; i < candles.length; i++) {
+        const prev = candles[i - 1];
+        const current = candles[i];
+        
+        if (usedTimes.has(current.time)) continue;
+
+        // 🎯 THÊM VOLUME MARKERS
+        if (activeFilters["LIQ"] || activeFilters["SHOCK"]) {
+          const volumeMarkers = createVolumeMarkers(candles, i);
+          markers.push(...volumeMarkers);
+          if (volumeMarkers.length > 0) {
+            usedTimes.add(current.time);
+            continue;
+          }
+        }
+
+        // 🎯 VOLUME DIVERGENCE DETECTION
+        if (activeFilters["WYCK"]) {
+          const volumeDivergence = detectVolumeDivergence(candles, i);
+          if (volumeDivergence !== "NO_DIVERGENCE" && !usedTimes.has(current.time)) {
+            const isBullish = volumeDivergence === "BULLISH_VOL_DIVERGENCE";
+            markers.push({
+              time: current.time,
+              position: isBullish ? "belowBar" : "aboveBar",
+              color: isBullish ? "#4CAF50" : "#F44336",
+              shape: "circle",
+              size: 1.3,
+              text: isBullish ? "WYCK↑" : "WYCK↓",
+            });
+            usedTimes.add(current.time);
+            continue;
+          }
+        }
+
+        // 🎯 BULLISH ENGULFING với volume confirmation
+        if (
+          activeFilters["Bullish Engulfing"] &&
+          current.close > current.open &&
+          prev.close < prev.open &&
+          current.close > prev.open &&
+          current.open < prev.close
+        ) {
+          const volumeAnalysis = analyzeVolume(candles, i);
+          const hasVolumeConfirmation = volumeAnalysis.isHighVolume;
+          
+          markers.push({
+            time: current.time,
+            position: REVERSAL_MARKER_CONFIG.BULLISH_REVERSAL.position,
+            color: REVERSAL_MARKER_CONFIG.BULLISH_REVERSAL.color,
+            shape: REVERSAL_MARKER_CONFIG.BULLISH_REVERSAL.shape,
+            size: REVERSAL_MARKER_CONFIG.BULLISH_REVERSAL.size,
+            text: hasVolumeConfirmation ? "ENG↑ VOL" : "ENG↑",
+          });
+          usedTimes.add(current.time);
+          continue;
+        }
+
+        // 🎯 BEARISH ENGULFING với volume confirmation
+        if (
+          activeFilters["Bearish Engulfing"] &&
+          current.close < current.open &&
+          prev.close > prev.open &&
+          current.open > prev.close &&
+          current.close < prev.open
+        ) {
+          const volumeAnalysis = analyzeVolume(candles, i);
+          const hasVolumeConfirmation = volumeAnalysis.isHighVolume;
+          
+          markers.push({
+            time: current.time,
+            position: REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL.position,
+            color: REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL.color,
+            shape: REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL.shape,
+            size: REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL.size,
+            text: hasVolumeConfirmation ? "ENG↓ VOL" : "ENG↓",
+          });
+          usedTimes.add(current.time);
+          continue;
+        }
+
+        // 🎯 DOJI với volume analysis
+        if (activeFilters["Doji"]) {
+          const body = Math.abs(current.close - current.open);
+          const range = current.high - current.low;
+          if (range > 0 && body / range < 0.1) {
+            const dojiContext = getDojiContext(candles, i);
+            const volumeAnalysis = analyzeVolume(candles, i);
+            const hasHighVolume = volumeAnalysis.isHighVolume;
+
+            let markerConfig = REVERSAL_MARKER_CONFIG.NEUTRAL;
+            let dojiText = "DOJI";
+
+            if (dojiContext === "bullish") {
+              markerConfig = REVERSAL_MARKER_CONFIG.BULLISH_REVERSAL;
+              dojiText = hasHighVolume ? "DOJI↑ VOL" : "DOJI↑";
+            } else if (dojiContext === "bearish") {
+              markerConfig = REVERSAL_MARKER_CONFIG.BEARISH_REVERSAL;
+              dojiText = hasHighVolume ? "DOJI↓ VOL" : "DOJI↓";
+            }
+
+            markers.push({
+              time: current.time,
+              position: markerConfig.position,
+              color: markerConfig.color,
+              shape: markerConfig.shape,
+              size: markerConfig.size,
+              text: dojiText,
+            });
+            usedTimes.add(current.time);
+            continue;
+          }
+        }
+
+        // 🎯 SMC PATTERNS với volume analysis nâng cao
+        if (activeFilters["SMC"] && i >= 4) {
+          const prev1 = candles[i - 1];
+          const prev2 = candles[i - 2];
+
+          if (current.volume === undefined || prev1.volume === undefined) {
+            continue;
+          }
+
+          const volumeAnalysis = analyzeVolume(candles, i);
+          const isSMCPattern =
+            current.volume > prev1.volume * 1.5 &&
+            Math.abs(current.close - current.open) / (current.high - current.low) < 0.3 &&
+            current.high - current.low > prev1.high - prev1.low;
+
+          if (isSMCPattern) {
+            markers.push({
+              time: current.time,
+              position: "aboveBar",
+              color: volumeAnalysis.isVolumeSpike ? "#8A2BE2" : "#a46bffff", // Màu tím cho volume spike
+              shape: "circle",
+              size: volumeAnalysis.isVolumeSpike ? 1.8 : 1.3,
+              text: volumeAnalysis.isVolumeSpike ? "SMC VOL" : "SMC",
+            });
+            usedTimes.add(current.time);
+            continue;
+          }
+        }
+      }
+
+      return markers;
+    },
+    [activeFilters, analyzeVolume, createVolumeMarkers, detectVolumeDivergence]
+  );
+
+  // 🆕 HÀM DETECT VOLUME-BASED PATTERNS CHO PREDICTION
+  const detectVolumePatterns = useCallback((candles: CandleData[]): {
+    volumeSignals: string[];
+    volumeConfidence: number;
+  } => {
+    const volumeSignals: string[] = [];
+    let volumeConfidence = 0;
+
+    if (candles.length < 5) return { volumeSignals, volumeConfidence };
+
+    const recentCandles = candles.slice(-5);
+    const volumes = recentCandles.map(c => c.volume || 0);
+    const prices = recentCandles.map(c => c.close);
+
+    // Volume trend analysis
+    const volumeAvg = volumes.reduce((sum, vol) => sum + vol, 0) / volumes.length;
+    const currentVolume = volumes[volumes.length - 1];
+    const volumeTrend = currentVolume > volumeAvg * 1.3;
+
+    // Price-Volume correlation
+    const priceChanges = [];
+    const volumeChanges = [];
+
+    for (let i = 1; i < recentCandles.length; i++) {
+      const priceChange = ((prices[i] - prices[i-1]) / prices[i-1]) * 100;
+      const volumeChange = volumes[i-1] > 0 ? ((volumes[i] - volumes[i-1]) / volumes[i-1]) * 100 : 0;
+      
+      priceChanges.push(priceChange);
+      volumeChanges.push(volumeChange);
+    }
+
+    // Positive correlation: price và volume cùng hướng
+    const positiveCorrelations = priceChanges.filter((price, index) => 
+      (price > 0 && volumeChanges[index] > 0) || (price < 0 && volumeChanges[index] < 0)
+    ).length;
+
+    if (volumeTrend && positiveCorrelations >= 3) {
+      volumeSignals.push("STRONG_VOLUME_CONFIRMATION");
+      volumeConfidence += 25;
+    }
+
+    // Volume breakout
+    if (currentVolume > volumeAvg * 2) {
+      volumeSignals.push("VOLUME_BREAKOUT");
+      volumeConfidence += 20;
+    }
+
+    // Volume divergence
+    const lastPriceChange = priceChanges[priceChanges.length - 1];
+    const lastVolumeChange = volumeChanges[volumeChanges.length - 1];
+    
+    if (lastPriceChange > 2 && lastVolumeChange < -20) {
+      volumeSignals.push("BEARISH_VOLUME_DIVERGENCE");
+      volumeConfidence -= 15;
+    } else if (lastPriceChange < -2 && lastVolumeChange > 50) {
+      volumeSignals.push("BULLISH_VOLUME_DIVERGENCE"); 
+      volumeConfidence += 15;
+    }
+
+    return { volumeSignals, volumeConfidence: Math.max(0, volumeConfidence) };
+  }, []);
+
+  // CẬP NHẬT predictPatterns với volume analysis
+  const predictPatterns = useCallback(
+    (
+      candles: CandleData[]
+    ): {
+      markers: SeriesMarker<UTCTimestamp>[];
+      prediction: Prediction | null;
+    } => {
+      const markers: SeriesMarker<UTCTimestamp>[] = [];
+
+      if (candles.length < 20) return { markers, prediction: null };
+
+      // 🎯 THÊM VOLUME ANALYSIS
+      const volumeAnalysis = detectVolumePatterns(candles);
+      
+      // ... existing prediction logic ...
+
+      // 🎯 THÊM VOLUME-BASED MARKERS
+      if (volumeAnalysis.volumeSignals.includes("VOLUME_BREAKOUT")) {
+        markers.push({
+          time: recentCandles[recentCandles.length - 1].time,
+          position: "inBar",
+          color: "#FF5722",
+          shape: "triangleUp",
+          size: 1.5,
+          text: "VOL-BREAK",
+        });
+      }
+
+      if (volumeAnalysis.volumeSignals.includes("BULLISH_VOLUME_DIVERGENCE")) {
+        markers.push({
+          time: recentCandles[recentCandles.length - 1].time,
+          position: "belowBar",
+          color: "#4CAF50",
+          shape: "arrowUp",
+          size: 1.3,
+          text: "VOL-DIV↑",
+        });
+      }
+
+      // ... rest of existing prediction logic ...
+
+      return { markers, prediction: predictionResult };
+    },
+    [activeFilters, detectVolumePatterns]
+  );
+
+  // ... keep existing detectChartPatterns and other functions ...
+
+  return {
+    detectPatterns,
+    predictPatterns,
+    detectChartPatterns,
+    detectReversalPatterns: createReversalMarkers,
+    detectRSIDivergence,
+    detectDoubleTopBottom,
+    analyzeVolume, // 🆕 Export volume analysis
+    detectVolumePatterns, // 🆕 Export volume patterns
+  };
+}

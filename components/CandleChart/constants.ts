@@ -53,3 +53,52 @@ export const PREDICTION_CONFIGS = {
     shape: "circle" as const,
   },
 };
+
+// Trong usePatternDetection hoặc constants
+export const MARKER_CONFIG = {
+  // Reversal Up markers (Bullish reversal)
+  REVERSAL_UP: {
+    position: "belowBar" as const,
+    color: "#00D26A", // Xanh lá cho reversal up
+    shape: "arrowUp" as const,
+    size: 1.8,
+  },
+
+  // Reversal Down markers (Bearish reversal)
+  REVERSAL_DOWN: {
+    position: "aboveBar" as const,
+    color: "#FF0080", // Đỏ hồng cho reversal down
+    shape: "arrowDown" as const,
+    size: 1.8,
+  },
+
+  // Pattern markers
+  PATTERN_BULLISH: {
+    position: "belowBar" as const,
+    color: "#4ECDC4",
+    shape: "circle" as const,
+    size: 1.2,
+  },
+
+  PATTERN_BEARISH: {
+    position: "aboveBar" as const,
+    color: "#FF6B6B",
+    shape: "circle" as const,
+    size: 1.2,
+  },
+
+  // Prediction markers
+  PREDICTION_BULL: {
+    position: "inBar" as const,
+    color: "#FFD93D",
+    shape: "star" as const,
+    size: 1.5,
+  },
+
+  PREDICTION_BEAR: {
+    position: "inBar" as const,
+    color: "#FF9F43",
+    shape: "star" as const,
+    size: 1.5,
+  },
+};

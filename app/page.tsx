@@ -6,7 +6,7 @@ export default function Home() {
       <h1
         style={{ fontSize: "28px", fontWeight: "bold", marginBottom: "20px" }}
       >
-        Binance Candlestick Chart + Risk Radar
+        Binance Chart Tool
       </h1>
       <CandleChart />
     </main>
