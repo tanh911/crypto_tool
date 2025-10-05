@@ -169,7 +169,7 @@ export function useDataFetching({
           top: 0.7, // 70% trên cùng (volume ở dưới)
           bottom: 0.1, // 10% dưới cùng
         },
-        visible: true,
+        visible: false,
         borderColor: "#e0e0e0",
         entireTextOnly: true,
         autoScale: true, // ✅ Tự động scale theo volume data
