@@ -3,44 +3,198 @@ import { CandleData } from "../types";
 import { VolumeCluster, VolumeProfileLevel } from "../types";
 
 /* ------------------------- MOVING AVERAGES ------------------------- */
+
 export const calculateSMA = (
-  data: CandleData[],
+  candles: CandleData[],
   period: number
 ): (number | null)[] => {
-  if (data.length < period) return data.map(() => null);
+  if (candles.length < period) {
+    console.warn(
+      `⚠️ Not enough candles for SMA${period}: ${candles.length} < ${period}`
+    );
+    return new Array(candles.length).fill(null);
+  }
 
-  const sma: (number | null)[] = new Array(period - 1).fill(null);
+  const sma: (number | null)[] = new Array(candles.length).fill(null);
 
-  for (let i = period - 1; i < data.length; i++) {
-    const slice = data.slice(i - period + 1, i + 1);
-    const sum = slice.reduce((total, candle) => total + candle.close, 0);
-    sma.push(sum / period);
+  for (let i = period - 1; i < candles.length; i++) {
+    let sum = 0;
+    for (let j = i - period + 1; j <= i; j++) {
+      sum += candles[j].close;
+    }
+    const average = sum / period;
+    sma[i] = average;
   }
 
   return sma;
 };
 
-export const calculateEMA = (
-  data: CandleData[],
+// utils/technicalIndicators.ts
+
+/**
+ * Tính EMA chính xác theo Binance
+ */
+// utils/technicalIndicators.ts
+
+export function calculateEMA(
+  candles: CandleData[],
   period: number
-): (number | null)[] => {
-  if (data.length < period) return data.map(() => null);
+): (number | null)[] {
+  if (candles.length < period) {
+    return new Array(candles.length).fill(null);
+  }
 
-  const k = 2 / (period + 1);
-  const ema: (number | null)[] = new Array(period - 1).fill(null);
+  const ema: (number | null)[] = new Array(candles.length).fill(null);
+  const multiplier = 2 / (period + 1);
 
-  // First EMA value is SMA
-  const firstSMA =
-    data.slice(0, period).reduce((sum, candle) => sum + candle.close, 0) /
-    period;
-  ema.push(firstSMA);
+  let sma = 0;
+  for (let i = 0; i < period; i++) {
+    sma += candles[i].close;
+  }
+  sma = sma / period;
+  ema[period - 1] = sma;
 
-  for (let i = period; i < data.length; i++) {
-    const currentEMA = data[i].close * k + ema[i - 1]! * (1 - k);
-    ema.push(currentEMA);
+  for (let i = period; i < candles.length; i++) {
+    ema[i] = candles[i].close * multiplier + ema[i - 1]! * (1 - multiplier);
   }
 
   return ema;
+}
+export const calculateBinanceMA = (
+  candles: CandleData[],
+  period: number
+): (number | null)[] => {
+  if (candles.length < period) {
+    console.warn(`Not enough candles: ${candles.length} < ${period}`);
+    return new Array(candles.length).fill(null);
+  }
+
+  // 🔥 THỬ DÙNG SMA TRƯỚC VÌ BINANCE CÓ THỂ DÙNG SMA
+  return calculateSMA(candles, period);
+};
+/**
+ * Cách tính EMA thứ 2 - có thể Binance dùng cách này
+ */
+export function calculateEMA2(
+  candles: CandleData[],
+  period: number
+): (number | null)[] {
+  if (candles.length < period) {
+    return new Array(candles.length).fill(null);
+  }
+
+  const ema: (number | null)[] = new Array(candles.length).fill(null);
+  const k = 2 / (period + 1);
+
+  // Bắt đầu từ candle thứ period
+  let emaValue = candles[0].close; // Bắt đầu từ close đầu tiên
+
+  for (let i = 0; i < candles.length; i++) {
+    if (i < period - 1) {
+      ema[i] = null;
+      continue;
+    }
+
+    if (i === period - 1) {
+      // Tính SMA cho period đầu tiên
+      let sum = 0;
+      for (let j = 0; j < period; j++) {
+        sum += candles[i - j].close;
+      }
+      emaValue = sum / period;
+    } else {
+      // Tính EMA
+      emaValue = candles[i].close * k + emaValue * (1 - k);
+    }
+
+    ema[i] = emaValue;
+  }
+
+  return ema;
+}
+
+/**
+ * Cách tính EMA thứ 3 - Reverse calculation (tính từ cuối)
+ */
+export function calculateEMA3(
+  candles: CandleData[],
+  period: number
+): (number | null)[] {
+  if (candles.length < period) {
+    return new Array(candles.length).fill(null);
+  }
+
+  const ema: (number | null)[] = new Array(candles.length).fill(null);
+  const multiplier = 2 / (period + 1);
+
+  // Tính từ cuối mảng về đầu (có thể Binance làm vậy)
+  for (let i = candles.length - 1; i >= period - 1; i--) {
+    if (i === period - 1) {
+      // SMA đầu tiên
+      let sum = 0;
+      for (let j = 0; j < period; j++) {
+        sum += candles[i - j].close;
+      }
+      ema[i] = sum / period;
+    } else {
+      ema[i] = candles[i].close * multiplier + ema[i + 1]! * (1 - multiplier);
+    }
+  }
+
+  return ema;
+}
+
+/**
+ * Hàm tính MA chính xác cho Binance Futures
+ */
+
+/**
+ * Verify MA values với Binance
+ */
+export const verifyMAWithBinance = (
+  candles: CandleData[],
+  ma25: (number | null)[],
+  ma99: (number | null)[]
+) => {
+  if (candles.length < 99) return;
+
+  const lastCandle = candles[candles.length - 1];
+  const lastMA25 = ma25[ma25.length - 1];
+  const lastMA99 = ma99[ma99.length - 1];
+
+  console.log("🔍 MA VERIFICATION:");
+  console.log("Current Price:", lastCandle.close);
+  console.log("Our MA25:", lastMA25);
+  console.log("Our MA99:", lastMA99);
+
+  // Hiển thị các closes dùng để tính MA
+  console.log(
+    "Last 25 closes for MA25:",
+    candles.slice(-25).map((c) => c.close)
+  );
+  console.log(
+    "Last 99 closes for MA99:",
+    candles.slice(-99).map((c) => c.close)
+  );
+};
+
+// 🔥 HÀM TÍNH MA CHÍNH XÁC CHO REAL-TIME
+export const calculateMovingAverages = (
+  candles: CandleData[],
+  periods: number[]
+): Record<number, (number | null)[]> => {
+  const result: Record<number, (number | null)[]> = {};
+
+  periods.forEach((period) => {
+    if (period === 25 || period === 99) {
+      // Sử dụng EMA cho MA25 và MA99
+      result[period] = calculateEMA(candles, period);
+    } else {
+      result[period] = calculateSMA(candles, period);
+    }
+  });
+
+  return result;
 };
 
 /* ------------------------- TREND ANALYSIS -------------------------- */
@@ -48,8 +202,8 @@ export interface TrendAnalysis {
   trend: "BULLISH" | "BEARISH" | "SIDEWAYS";
   strength: number;
   signals: string[];
-  maTrend?: "BULLISH" | "BEARISH" | "NEUTRAL";
-  pricePosition?: "ABOVE_MA" | "BELOW_MA" | "NEAR_MA";
+  ma25Value?: number;
+  ma99Value?: number;
 }
 
 export const analyzeTrend = (
@@ -57,7 +211,7 @@ export const analyzeTrend = (
   ma25: number[],
   ma99: number[]
 ): TrendAnalysis => {
-  if (candles.length < 2) {
+  if (candles.length < 2 || ma25.length < 2 || ma99.length < 2) {
     return {
       trend: "SIDEWAYS",
       strength: 0,
@@ -66,70 +220,59 @@ export const analyzeTrend = (
   }
 
   const signals: string[] = [];
-  let bullishSignals = 0;
-  let bearishSignals = 0;
+  let bullishScore = 0;
+  let bearishScore = 0;
 
-  // Price position analysis
   const currentPrice = candles[candles.length - 1].close;
-  const previousPrice = candles[candles.length - 2].close;
+  const currentMA25 = ma25[ma25.length - 1];
+  const currentMA99 = ma99[ma99.length - 1];
 
-  // MA analysis
-  if (ma25.length >= 2 && ma99.length >= 2) {
-    const currentMA25 = ma25[ma25.length - 1];
-    const previousMA25 = ma25[ma25.length - 2];
-    const currentMA99 = ma99[ma99.length - 1];
-    const previousMA99 = ma99[ma99.length - 2];
-
-    // MA crossover signals
-    if (currentMA25 > currentMA99 && previousMA25 <= previousMA99) {
-      signals.push("MA25_CROSSED_ABOVE_MA99");
-      bullishSignals++;
-    }
-    if (currentMA25 < currentMA99 && previousMA25 >= previousMA99) {
-      signals.push("MA25_CROSSED_BELOW_MA99");
-      bearishSignals++;
-    }
-
-    // Price vs MA position
-    if (currentPrice > currentMA25 && currentPrice > currentMA99) {
-      signals.push("PRICE_ABOVE_BOTH_MA");
-      bullishSignals++;
-    } else if (currentPrice < currentMA25 && currentPrice < currentMA99) {
-      signals.push("PRICE_BELOW_BOTH_MA");
-      bearishSignals++;
-    }
+  // Price position vs MA
+  if (currentPrice > currentMA25) {
+    signals.push("PRICE_ABOVE_MA25");
+    bullishScore++;
+  } else {
+    signals.push("PRICE_BELOW_MA25");
+    bearishScore++;
   }
 
-  // Price momentum
-  const priceChange = ((currentPrice - previousPrice) / previousPrice) * 100;
-  if (Math.abs(priceChange) > 0.5) {
-    if (priceChange > 0) {
-      signals.push(`STRONG_UP_MOMENTUM_${priceChange.toFixed(2)}%`);
-      bullishSignals++;
-    } else {
-      signals.push(`STRONG_DOWN_MOMENTUM_${Math.abs(priceChange).toFixed(2)}%`);
-      bearishSignals++;
-    }
+  if (currentPrice > currentMA99) {
+    signals.push("PRICE_ABOVE_MA99");
+    bullishScore += 2;
+  } else {
+    signals.push("PRICE_BELOW_MA99");
+    bearishScore += 2;
   }
 
-  // Determine overall trend
+  // MA crossover
+  if (currentMA25 > currentMA99) {
+    signals.push("MA25_ABOVE_MA99");
+    bullishScore++;
+  } else {
+    signals.push("MA25_BELOW_MA99");
+    bearishScore++;
+  }
+
+  // Determine trend
   let trend: "BULLISH" | "BEARISH" | "SIDEWAYS" = "SIDEWAYS";
   let strength = 0;
 
-  if (bullishSignals > bearishSignals) {
+  if (bullishScore > bearishScore) {
     trend = "BULLISH";
-    strength = bullishSignals / (bullishSignals + bearishSignals);
-  } else if (bearishSignals > bullishSignals) {
+    strength = bullishScore / (bullishScore + bearishScore);
+  } else if (bearishScore > bullishScore) {
     trend = "BEARISH";
-    strength = bearishSignals / (bullishSignals + bearishSignals);
+    strength = bearishScore / (bullishScore + bearishScore);
   } else {
     strength = 0.5;
   }
 
   return {
     trend,
-    strength,
+    strength: Math.round(strength * 100) / 100,
     signals,
+    ma25Value: currentMA25,
+    ma99Value: currentMA99,
   };
 };
 
@@ -141,7 +284,12 @@ export const calculateVolumeProfile = (
 
   // Group volume by price levels
   const priceLevels = new Map<number, number>();
-  const priceStep = 0.001; // Adjust based on asset price
+
+  // Xác định price step dựa trên biến động giá
+  const priceRange =
+    Math.max(...candles.map((c) => c.high)) -
+    Math.min(...candles.map((c) => c.low));
+  const priceStep = priceRange > 100 ? 1 : priceRange > 10 ? 0.1 : 0.001;
 
   candles.forEach((candle) => {
     const level = Math.round(candle.close / priceStep) * priceStep;
@@ -153,6 +301,7 @@ export const calculateVolumeProfile = (
     (sum, vol) => sum + vol,
     0
   );
+
   const clusters: VolumeCluster[] = Array.from(priceLevels.entries())
     .map(([priceLevel, volume]) => ({
       priceLevel,
@@ -176,10 +325,14 @@ export const analyzeVolumePattern = (candles: CandleData[]) => {
   const previousAvg =
     previousVolumes.reduce((a, b) => a + b, 0) / previousVolumes.length;
 
+  const volumeChange = ((recentAvg - previousAvg) / previousAvg) * 100;
+
   return {
-    volumeChange: ((recentAvg - previousAvg) / previousAvg) * 100,
+    volumeChange: Math.round(volumeChange * 100) / 100,
     isSpike: recentAvg > previousAvg * 2,
     trend: recentAvg > previousAvg ? "INCREASING" : "DECREASING",
+    recentAvg: Math.round(recentAvg),
+    previousAvg: Math.round(previousAvg),
   };
 };
 
@@ -209,6 +362,7 @@ export const detectSupportResistance = (
     }
   }
 
+  // Loại bỏ trùng lặp và sắp xếp
   return {
     support: [...new Set(supportLevels)].sort((a, b) => a - b),
     resistance: [...new Set(resistanceLevels)].sort((a, b) => a - b),
@@ -249,4 +403,41 @@ export const calculateATR = (
   }
 
   return trueRanges.slice(-period).reduce((sum, tr) => sum + tr, 0) / period;
+};
+
+/* ------------------------- UTILITY FUNCTIONS ---------------------- */
+
+// Hàm kiểm tra tính hợp lệ của dữ liệu candles
+export const validateCandles = (candles: CandleData[]): boolean => {
+  if (!candles || candles.length === 0) return false;
+
+  return candles.every(
+    (candle) =>
+      candle.time > 0 &&
+      candle.open > 0 &&
+      candle.high > 0 &&
+      candle.low > 0 &&
+      candle.close > 0 &&
+      candle.high >= candle.low &&
+      candle.high >= Math.max(candle.open, candle.close) &&
+      candle.low <= Math.min(candle.open, candle.close)
+  );
+};
+
+// Hàm lấy các candles hợp lệ cho tính toán MA
+export const getValidCandlesForMA = (
+  candles: CandleData[],
+  period: number
+): CandleData[] => {
+  const validCandles = candles.filter(
+    (candle) => candle.close && candle.close > 0
+  );
+
+  if (validCandles.length < period) {
+    console.warn(
+      `Only ${validCandles.length} valid candles for MA${period} calculation`
+    );
+  }
+
+  return validCandles;
 };

@@ -11,7 +11,39 @@ import {
 import { RiskData, ActiveFilters, Prediction, Candle } from "../types";
 import { API_URL } from "../constants";
 import { TimeUtils } from "../utils/timeUtils";
-import { calculateSMA, analyzeTrend } from "../utils/technicalIndicators";
+import {
+  calculateSMA,
+  analyzeTrend,
+  calculateEMA,
+  calculateBinanceMA,
+} from "../utils/technicalIndicators";
+
+interface BinanceKline {
+  0: number; // Open time (milliseconds)
+  1: string; // Open price
+  2: string; // High price
+  3: string; // Low price
+  4: string; // Close price
+  5: string; // Volume
+  6: number; // Close time (milliseconds)
+  7: string; // Quote asset volume
+  8: number; // Number of trades
+  9: string; // Taker buy base asset volume
+  10: string; // Taker buy quote asset volume
+  11: string; // Ignore
+}
+
+interface SimpleKline {
+  t: number; // Start time
+  o: string; // Open price
+  c: string; // Close price
+  h: string; // High price
+  l: string; // Low price
+  v: string; // Volume
+  x: boolean; // Is closed?
+  s?: string; // Symbol (optional)
+  i?: string; // Interval (optional)
+}
 
 interface CandleData {
   time: UTCTimestamp;
@@ -36,7 +68,6 @@ interface UseDataFetchingProps {
   setLastUpdate: (date: Date) => void;
   setPrediction: (prediction: Prediction | null) => void;
   setIsLoading: (loading: boolean) => void;
-  // ✅ FIXED: chartContainerRef is now properly defined
   chartContainerRef: React.RefObject<HTMLDivElement | null>;
   detectPatterns: (candles: CandleData[]) => SeriesMarker<UTCTimestamp>[];
   detectChartPatterns: (candles: CandleData[]) => SeriesMarker<UTCTimestamp>[];
@@ -46,6 +77,48 @@ interface UseDataFetchingProps {
   };
 }
 
+// Hàm fetch dữ liệu từ Binance Futures
+const fetchBinanceFuturesData = async (
+  symbol: string,
+  interval: string,
+  limit: number = 500
+): Promise<CandleData[]> => {
+  try {
+    const formattedSymbol = symbol.toUpperCase();
+    const response = await axios.get(
+      `https://fapi.binance.com/fapi/v1/klines`,
+      {
+        params: {
+          symbol: formattedSymbol,
+          interval: interval,
+          limit: limit,
+        },
+        timeout: 30000,
+      }
+    );
+
+    const klines: BinanceKline[] = response.data;
+
+    const candles: CandleData[] = klines.map((kline: BinanceKline) => ({
+      time: Math.floor(kline[0] / 1000) as UTCTimestamp, // Convert milliseconds to seconds
+      open: parseFloat(kline[1]),
+      high: parseFloat(kline[2]),
+      low: parseFloat(kline[3]),
+      close: parseFloat(kline[4]),
+      volume: parseFloat(kline[5]),
+    }));
+
+    console.log(
+      `✅ Binance Futures returned ${candles.length} candles for ${formattedSymbol}`
+    );
+    return candles;
+  } catch (error) {
+    console.error(`❌ Error fetching from Binance Futures:`, error);
+    throw error;
+  }
+};
+
+// Fallback đến backend nếu cần
 const fetchHistoricalDataFromBackend = async (
   coin: string,
   interval: string,
@@ -77,7 +150,7 @@ export function useDataFetching({
   setLastUpdate,
   setPrediction,
   setIsLoading,
-  chartContainerRef, // ✅ Now properly received from props
+  chartContainerRef,
   detectPatterns,
   detectChartPatterns,
   predictPatterns,
@@ -89,6 +162,7 @@ export function useDataFetching({
   const ma99SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const currentCandleRef = useRef<CandleData | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const candlesDataRef = useRef<CandleData[]>([]);
 
   const [trendAnalysis, setTrendAnalysis] = useState<{
     trend: "BULLISH" | "BEARISH" | "SIDEWAYS";
@@ -152,28 +226,36 @@ export function useDataFetching({
         },
       });
 
-      // ✅ Price scale cho candles và MA (bên phải) - CHÍNH
+      // Price scale cho candles và MA (bên phải)
       const mainPriceScale = "right";
       chart.priceScale(mainPriceScale).applyOptions({
         scaleMargins: {
-          top: 0.1, // 10% trên cùng
-          bottom: 0.3, // 30% dưới cùng (chừa chỗ cho volume)
+          top: 0.1,
+          bottom: 0.3,
         },
         borderColor: "#e0e0e0",
+        mode: 1, // Logarithmic mode - sẽ cho khoảng cách đều hơn
+        entireTextOnly: true, // Giúp giảm số lượng label hiển thị
       });
 
-      // ✅ Price scale cho volume (bên trái) - RIÊNG BIỆT
+      // Điều chỉnh time scale để ảnh hưởng gián tiếp đến price scale
+      chart.timeScale().applyOptions({
+        barSpacing: 12, // Tăng khoảng cách nến
+        minBarSpacing: 2,
+        rightOffset: 15,
+      });
+
+      // Price scale cho volume (bên trái)
       const volumePriceScale = "left";
       chart.priceScale(volumePriceScale).applyOptions({
         scaleMargins: {
-          top: 0.7, // 70% trên cùng (volume ở dưới)
-          bottom: 0.1, // 10% dưới cùng
+          top: 0.7,
+          bottom: 0.1,
         },
-        visible: true,
+        visible: false,
         borderColor: "#e0e0e0",
         entireTextOnly: true,
-        autoScale: true, // ✅ Tự động scale theo volume data
-        mode: 2, // ✅ Chế độ logarithmic hoặc normal
+        autoScale: true,
       });
 
       // Pane chính (price) - candles
@@ -186,24 +268,23 @@ export function useDataFetching({
         wickDownColor: "#ef5350",
       });
 
-      // Pane phụ (volume) - histogram - DÙNG PRICE SCALE RIÊNG
+      // Pane phụ (volume) - histogram
       const volumeSeries = chart.addHistogramSeries({
         priceFormat: {
           type: "volume",
           precision: 0,
         },
-        priceScaleId: volumePriceScale, // ✅ Dùng price scale riêng
+        priceScaleId: volumePriceScale,
         color: "#26a69a",
       });
 
-      // Cấu hình thêm cho volume series
       volumeSeries.applyOptions({
         priceLineVisible: false,
-        lastValueVisible: false, // Ẩn last value để gọn
+        lastValueVisible: false,
         baseLineVisible: false,
       });
 
-      // MA lines - dùng chung price scale với candles
+      // MA lines
       const ma25 = chart.addLineSeries({
         color: "#2962FF",
         lineWidth: 2,
@@ -260,7 +341,6 @@ export function useDataFetching({
 
     const volumeData: VolumeData[] = candles.map((candle) => {
       const color = candle.close >= candle.open ? "#26a69a" : "#ef5350";
-
       return {
         time: candle.time,
         value: candle.volume,
@@ -269,72 +349,252 @@ export function useDataFetching({
     });
 
     volumeSeriesRef.current.setData(volumeData);
-    console.log(
-      `✅ Volume updated with separate price scale: ${volumeData.length} data points`
-    );
+    console.log(`✅ Volume updated: ${volumeData.length} data points`);
   }, []);
+
+  // const updateMAs = useCallback((candles: CandleData[]) => {
+  //   if (!ma25SeriesRef.current || !ma99SeriesRef.current) return;
+
+  //   try {
+  //     const closedCandles = candles.filter((c) => !!c.close);
+  //     const ma25Values = calculateEMA(closedCandles, 25);
+  //     const ma99Values = calculateEMA(closedCandles, 99);
+
+  //     const ma25Data: { time: UTCTimestamp; value: number }[] = [];
+  //     const ma99Data: { time: UTCTimestamp; value: number }[] = [];
+
+  //     for (let i = 0; i < candles.length; i++) {
+  //       const candle = candles[i];
+
+  //       if (i >= 24 && ma25Values[i] !== null) {
+  //         ma25Data.push({
+  //           time: candle.time,
+  //           value: ma25Values[i] as number,
+  //         });
+  //       }
+
+  //       if (i >= 98 && ma99Values[i] !== null) {
+  //         ma99Data.push({
+  //           time: candle.time,
+  //           value: ma99Values[i] as number,
+  //         });
+  //       }
+  //     }
+
+  //     // Set data
+  //     ma25SeriesRef.current.setData(ma25Data);
+  //     ma99SeriesRef.current.setData(ma99Data);
+
+  //     // Phân tích xu hướng
+  //     const validMa25Values = ma25Values.filter((v) => v !== null) as number[];
+  //     const validMa99Values = ma99Values.filter((v) => v !== null) as number[];
+
+  //     if (validMa25Values.length >= 2 && validMa99Values.length >= 2) {
+  //       const trendAnalysis = analyzeTrend(
+  //         candles,
+  //         validMa25Values,
+  //         validMa99Values
+  //       );
+  //       setTrendAnalysis(trendAnalysis);
+  //     }
+
+  //     console.log(
+  //       `✅ MA lines updated: MA25=${ma25Data.length}, MA99=${ma99Data.length}`
+  //     );
+  //   } catch (error) {
+  //     console.error("❌ Error updating MA lines:", error);
+  //   }
+  // }, []);
+
+  // ===================== REAL-TIME CANDLE UPDATE =====================
+  // Trong useDataFetching.ts
+  const verifyMAWithBinance = (
+    candles: CandleData[],
+    ma25: (number | null)[],
+    ma99: (number | null)[]
+  ) => {
+    if (candles.length < 99) return;
+
+    const lastCandle = candles[candles.length - 1];
+    const lastMA25 = ma25[ma25.length - 1];
+    const lastMA99 = ma99[ma99.length - 1];
+
+    console.log("🔍 MA VERIFICATION:");
+    console.log("Current Price:", lastCandle.close);
+    console.log("Our MA25:", lastMA25);
+    console.log("Our MA99:", lastMA99);
+    console.log(
+      "Price vs MA25:",
+      lastCandle.close > (lastMA25 || 0) ? "ABOVE" : "BELOW"
+    );
+    console.log(
+      "Price vs MA99:",
+      lastCandle.close > (lastMA99 || 0) ? "ABOVE" : "BELOW"
+    );
+
+    // Hiển thị các closes dùng để tính MA
+    if (candles.length >= 25) {
+      console.log(
+        "Last 25 closes for MA25:",
+        candles.slice(-25).map((c) => c.close)
+      );
+    }
+    if (candles.length >= 99) {
+      console.log(
+        "Last 99 closes for MA99:",
+        candles.slice(-99).map((c) => c.close)
+      );
+    }
+  };
 
   const updateMAs = useCallback((candles: CandleData[]) => {
     if (!ma25SeriesRef.current || !ma99SeriesRef.current) return;
 
     try {
-      const ma25Values = calculateSMA(candles, 25);
-      const ma99Values = calculateSMA(candles, 99);
+      if (candles.length < 100) {
+        console.warn(`⚠️ Not enough candles for MA: ${candles.length} < 100`);
+        return;
+      }
 
-      const ma25Data = candles
-        .map((candle, index) => {
-          if (index < 24) return null;
-          const maValue = ma25Values[index];
-          return maValue !== null
-            ? { time: candle.time, value: maValue }
-            : null;
-        })
-        .filter((item) => item !== null) as {
-        time: UTCTimestamp;
-        value: number;
-      }[];
+      // 🔥 SỬ DỤNG HÀM TÍNH MA CHÍNH
+      const ma25Values = calculateBinanceMA(candles, 25);
+      const ma99Values = calculateBinanceMA(candles, 99);
 
-      const ma99Data = candles
-        .map((candle, index) => {
-          if (index < 98) return null;
-          const maValue = ma99Values[index];
-          return maValue !== null
-            ? { time: candle.time, value: maValue }
-            : null;
-        })
-        .filter((item) => item !== null) as {
-        time: UTCTimestamp;
-        value: number;
-      }[];
+      const ma25Data: { time: UTCTimestamp; value: number }[] = [];
+      const ma99Data: { time: UTCTimestamp; value: number }[] = [];
 
-      // Clear old data
-      ma25SeriesRef.current.setData([]);
-      ma99SeriesRef.current.setData([]);
+      for (let i = 0; i < candles.length; i++) {
+        if (ma25Values[i] !== null && i >= 24) {
+          ma25Data.push({
+            time: candles[i].time,
+            value: ma25Values[i] as number,
+          });
+        }
 
-      // Set new data
-      if (ma25Data.length > 0) ma25SeriesRef.current.setData(ma25Data);
-      if (ma99Data.length > 0) ma99SeriesRef.current.setData(ma99Data);
+        if (ma99Values[i] !== null && i >= 98) {
+          ma99Data.push({
+            time: candles[i].time,
+            value: ma99Values[i] as number,
+          });
+        }
+      }
 
-      // Phân tích xu hướng
-      const validMa25Values = ma25Values.filter((v) => v !== null) as number[];
-      const validMa99Values = ma99Values.filter((v) => v !== null) as number[];
+      // UPDATE MA LINES
+      ma25SeriesRef.current.setData(ma25Data);
+      ma99SeriesRef.current.setData(ma99Data);
+
+      // UPDATE TREND ANALYSIS
+      const validMa25Values = ma25Values.filter((v): v is number => v !== null);
+      const validMa99Values = ma99Values.filter((v): v is number => v !== null);
 
       if (validMa25Values.length >= 2 && validMa99Values.length >= 2) {
-        const trendAnalysis = analyzeTrend(
-          candles,
-          validMa25Values,
-          validMa99Values
-        );
-        setTrendAnalysis(trendAnalysis);
+        const trend = analyzeTrend(candles, validMa25Values, validMa99Values);
+        setTrendAnalysis(trend);
       }
 
       console.log(
-        `✅ MA lines updated: MA25=${ma25Data.length}, MA99=${ma99Data.length}`
+        `✅ MA Updated - MA25: ${ma25Data[ma25Data.length - 1]?.value}, MA99: ${
+          ma99Data[ma99Data.length - 1]?.value
+        }`
       );
     } catch (error) {
-      console.error("❌ Error updating MA lines:", error);
+      console.error("❌ MA update error:", error);
     }
   }, []);
+
+  const updateCurrentCandle = useCallback(
+    (kline: SimpleKline) => {
+      if (!candleSeriesRef.current || !volumeSeriesRef.current) return;
+
+      try {
+        const currentTime = Math.floor(kline.t / 1000) as UTCTimestamp; // Convert milliseconds to seconds
+        const open = parseFloat(kline.o);
+        const high = parseFloat(kline.h);
+        const low = parseFloat(kline.l);
+        const close = parseFloat(kline.c);
+        const volume = parseFloat(kline.v);
+        const isFinal = kline.x;
+
+        const currentCandles = [...candlesDataRef.current];
+
+        console.log("🔍 WEBSOCKET UPDATE DETAILS:", {
+          time: new Date(currentTime * 1000),
+          close: close,
+          isFinal: isFinal,
+          ourLastClose: currentCandles[currentCandles.length - 1]?.close,
+        });
+
+        if (isFinal) {
+          // Candle closed - create new one
+          const newCandle: CandleData = {
+            time: currentTime,
+            open: open,
+            high: high,
+            low: low,
+            close: close,
+            volume: volume,
+          };
+          currentCandles.push(newCandle);
+
+          // Giới hạn số lượng candles để đảm bảo MA tính đúng
+          if (currentCandles.length > 500) {
+            currentCandles.splice(0, currentCandles.length - 500);
+          }
+
+          currentCandleRef.current = newCandle;
+
+          console.log("🔄 NEW CANDLE CREATED:", {
+            time: new Date(currentTime * 1000),
+            close: close,
+          });
+        } else {
+          // Update current candle
+          const lastCandle = currentCandles[currentCandles.length - 1];
+          if (lastCandle) {
+            const updatedCandle: CandleData = {
+              time: lastCandle.time,
+              open: lastCandle.open,
+              high: Math.max(lastCandle.high, high),
+              low: Math.min(lastCandle.low, low),
+              close: close,
+              volume: volume,
+            };
+            currentCandles[currentCandles.length - 1] = updatedCandle;
+            currentCandleRef.current = updatedCandle;
+
+            // Update chart
+            candleSeriesRef.current.update(updatedCandle);
+
+            // Update volume
+            const volumeColor =
+              close >= updatedCandle.open ? "#26a69a" : "#ef5350";
+            volumeSeriesRef.current.update({
+              time: updatedCandle.time,
+              value: volume,
+              color: volumeColor,
+            });
+
+            console.log("📊 CANDLE UPDATED:", {
+              previousClose: lastCandle.close,
+              newClose: close,
+              volume: volume,
+            });
+          }
+        }
+
+        // Cập nhật MA khi có thay đổi
+        if (currentCandles.length >= 25) {
+          updateMAs(currentCandles);
+        }
+
+        candlesDataRef.current = currentCandles;
+        setLastUpdate(new Date());
+      } catch (error) {
+        console.error("❌ Error updating current candle:", error);
+      }
+    },
+    [updateMAs, setLastUpdate]
+  );
 
   // ===================== FETCH DATA =====================
   const fetchData = useCallback(
@@ -348,29 +608,50 @@ export function useDataFetching({
       try {
         console.log(`🔄 Fetching data for ${coin} with interval ${interval}`);
 
-        const limit = historicalYears && historicalYears > 0 ? 1000 : 300;
-        const candles = await fetchHistoricalDataFromBackend(
-          coin,
-          interval,
-          limit
-        );
+        let chartCandles: CandleData[] = [];
 
-        if (candles.length === 0) {
-          console.warn("No candles received from backend");
+        // Thử fetch từ Binance Futures trước
+        try {
+          const binanceSymbol = coin.toUpperCase().endsWith("USDT")
+            ? coin.toUpperCase()
+            : `${coin.toUpperCase()}USDT`;
+
+          chartCandles = await fetchBinanceFuturesData(
+            binanceSymbol,
+            interval,
+            500
+          );
+          console.log(
+            `✅ Successfully fetched ${chartCandles.length} candles from Binance Futures`
+          );
+        } catch (binanceError) {
+          console.warn("❌ Binance Futures failed, falling back to backend");
+
+          // Fallback đến backend
+          const limit = historicalYears && historicalYears > 0 ? 1000 : 300;
+          const backendCandles = await fetchHistoricalDataFromBackend(
+            coin,
+            interval,
+            limit
+          );
+
+          chartCandles = backendCandles.map((c) => ({
+            time: c.time as UTCTimestamp,
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close,
+            volume: c.volume || 0,
+          }));
+        }
+
+        if (chartCandles.length === 0) {
+          console.warn("No candles received from any source");
           return;
         }
 
-        // Convert to chart data
-        const chartCandles: CandleData[] = candles.map((c) => ({
-          time: TimeUtils.toLocalTimestamp(c.time) as UTCTimestamp,
-          open: c.open,
-          high: c.high,
-          low: c.low,
-          close: c.close,
-          volume: c.volume || 0,
-        }));
-
-        // LƯU CURRENT CANDLE để update real-time
+        // Lưu vào reference
+        candlesDataRef.current = chartCandles;
         currentCandleRef.current = chartCandles[chartCandles.length - 1];
 
         // Set data lên chart
@@ -404,8 +685,22 @@ export function useDataFetching({
           symbol: coin,
           score: 50,
           flagsMap: {},
-          latest: candles[candles.length - 1],
-          candles: candles,
+          latest: {
+            time: chartCandles[chartCandles.length - 1].time,
+            open: chartCandles[chartCandles.length - 1].open,
+            high: chartCandles[chartCandles.length - 1].high,
+            low: chartCandles[chartCandles.length - 1].low,
+            close: chartCandles[chartCandles.length - 1].close,
+            volume: chartCandles[chartCandles.length - 1].volume,
+          },
+          candles: chartCandles.map((c) => ({
+            time: c.time,
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close,
+            volume: c.volume,
+          })),
           interval,
         };
 
@@ -434,25 +729,36 @@ export function useDataFetching({
     ]
   );
 
-  // ===================== WEBSOCKET =====================
+  // ===================== WEBSOCKET IMPROVED =====================
   useEffect(() => {
-    if (!coin) return;
+    if (!coin || !interval) {
+      console.warn("❌ Coin or interval not specified for WebSocket");
+      return;
+    }
 
     // Đóng WebSocket cũ nếu tồn tại
     if (wsRef.current) {
+      console.log("🔌 Closing previous WebSocket connection");
       wsRef.current.close();
+      wsRef.current = null;
     }
 
-    console.log(`🔌 Connecting to Binance WebSocket for ${coin}`);
+    console.log(`🔌 Connecting to Binance WebSocket for ${coin}@${interval}`);
 
     try {
-      const ws = new WebSocket(
-        `wss://stream.binance.com:9443/ws/${coin.toLowerCase()}@kline_${interval}`
-      );
+      // Sử dụng đúng format cho Futures
+      const symbol = coin.toLowerCase().endsWith("usdt")
+        ? coin.toLowerCase()
+        : `${coin.toLowerCase()}usdt`;
+
+      const wsUrl = `wss://fstream.binance.com/ws/${symbol}@kline_${interval}`;
+      console.log(`🔌 WebSocket URL: ${wsUrl}`);
+
+      const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
-        console.log(`✅ WebSocket connected for ${coin}`);
+        console.log(`✅ WebSocket connected for ${symbol}@${interval}`);
       };
 
       ws.onmessage = (event) => {
@@ -460,47 +766,27 @@ export function useDataFetching({
           const data = JSON.parse(event.data);
           const kline = data.k;
 
-          if (kline && kline.x) {
-            // Candle closed - fetch new data
-            fetchData();
+          if (!kline) {
+            console.warn("❌ No kline data in WebSocket message");
             return;
           }
 
-          // Update current candle với volume
-          if (kline && currentCandleRef.current && candleSeriesRef.current) {
-            const currentPrice = parseFloat(kline.c);
-            const currentVolume = parseFloat(kline.v);
+          console.log(
+            `📊 WebSocket update: ${kline.s} - ${kline.c} - Closed: ${kline.x}`
+          );
 
-            const updatedCandle = {
-              ...currentCandleRef.current,
-              high: Math.max(
-                currentCandleRef.current.high,
-                parseFloat(kline.h)
-              ),
-              low: Math.min(currentCandleRef.current.low, parseFloat(kline.l)),
-              close: currentPrice,
-              volume: currentVolume,
-            };
+          // Sử dụng hàm update mới
+          updateCurrentCandle(kline);
 
-            // Update MAIN CHART
-            candleSeriesRef.current.update(updatedCandle);
-            currentCandleRef.current = updatedCandle;
-
-            // Update VOLUME
-            if (volumeSeriesRef.current) {
-              const volumeColor =
-                currentPrice > updatedCandle.open ? "#26a69a" : "#ef5350";
-              volumeSeriesRef.current.update({
-                time: updatedCandle.time,
-                value: currentVolume,
-                color: volumeColor,
-              });
-            }
-
-            setLastUpdate(new Date());
+          // Nếu candle đã đóng, fetch data mới sau 1 giây
+          if (kline.x) {
+            console.log("🔄 Candle closed, fetching new data...");
+            setTimeout(() => {
+              fetchData();
+            }, 1000);
           }
         } catch (error) {
-          console.error("WebSocket message parse error:", error);
+          console.error("❌ WebSocket message parse error:", error);
         }
       };
 
@@ -508,8 +794,22 @@ export function useDataFetching({
         console.error(`❌ WebSocket error for ${coin}:`, error);
       };
 
-      ws.onclose = () => {
-        console.log(`🔌 WebSocket closed for ${coin}`);
+      ws.onclose = (event) => {
+        console.log(
+          `🔌 WebSocket closed for ${coin}:`,
+          event.code,
+          event.reason
+        );
+
+        // Tự động kết nối lại sau 5 giây
+        if (event.code !== 1000) {
+          console.log("🔄 Attempting to reconnect WebSocket in 5 seconds...");
+          setTimeout(() => {
+            if (coin && interval) {
+              fetchData();
+            }
+          }, 5000);
+        }
       };
     } catch (error) {
       console.error(`❌ Error creating WebSocket for ${coin}:`, error);
@@ -517,10 +817,12 @@ export function useDataFetching({
 
     return () => {
       if (wsRef.current) {
+        console.log("🧹 Cleaning up WebSocket connection");
         wsRef.current.close();
+        wsRef.current = null;
       }
     };
-  }, [coin, interval, fetchData, setLastUpdate]);
+  }, [coin, interval, fetchData, updateCurrentCandle]);
 
   // ===================== AUTO REFRESH =====================
   useEffect(() => {

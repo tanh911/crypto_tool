@@ -7,6 +7,8 @@ interface TrendAnalysisProps {
     strength: number;
     signals: string[];
   } | null;
+  isTablet?: boolean; // Add this line
+  isMobile?: boolean; // Add this line
 }
 
 export function TrendAnalysis({ trendAnalysis }: TrendAnalysisProps) {

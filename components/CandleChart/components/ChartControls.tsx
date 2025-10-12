@@ -9,6 +9,8 @@ interface ChartControlsProps {
   autoRefresh: boolean;
   setAutoRefresh: (autoRefresh: boolean) => void;
   handleRefresh: () => void;
+  isTablet: boolean; // Thêm prop isTablet
+  isMobile?: boolean; // Thêm prop isMobile, không bắt buộc
 }
 
 // Intervals optimized for historical data
@@ -23,6 +25,7 @@ export function ChartControls({
   autoRefresh,
   setAutoRefresh,
   handleRefresh,
+  isTablet = false,
 }: ChartControlsProps) {
   return (
     <div

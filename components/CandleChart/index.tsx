@@ -12,6 +12,8 @@ import { RiskData, ActiveFilters, Prediction } from "./types";
 import { TrendAnalysis } from "./components/TrendAnalysis";
 import Image from "next/image";
 import QRCODE from "../../public/OvD4M6ar.jpg";
+import { get } from "http";
+import { CryptoNews } from "./components/CryptoNews";
 
 // Helper function để tạo ActiveFilters object với tất cả keys
 const createActiveFilters = (value: boolean): ActiveFilters => ({
@@ -55,7 +57,8 @@ export default function CandleChart() {
   const [prediction, setPrediction] = useState<Prediction | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [historicalYears, setHistoricalYears] = useState<number>(0);
-
+  const [isTablet, setIsTablet] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
   const [activeFilters, setActiveFilters] = useState<ActiveFilters>(
     createActiveFilters(true)
   );
@@ -65,7 +68,20 @@ export default function CandleChart() {
 
   const { detectPatterns, detectChartPatterns, predictPatterns } =
     usePatternDetection(activeFilters);
+  useEffect(() => {
+    // Detect device type useeffect
+    const checkDevice = () => {
+      const width = window.innerWidth;
+      setIsMobile(width < 768); // Mobile: < 768px
+      setIsTablet(width >= 768 && width < 1024); // Tablet: 768px - 1023px
+      // Desktop: ≥ 1024px (default state)
+    };
 
+    checkDevice();
+    window.addEventListener("resize", checkDevice);
+
+    return () => window.removeEventListener("resize", checkDevice);
+  }, []);
   // ✅ FIXED: Pass chartContainerRef to useDataFetching
   const { fetchData, trendAnalysis } = useDataFetching({
     coin,
@@ -238,9 +254,39 @@ export default function CandleChart() {
     setError(null);
     optimizedFetchData(true);
   };
+  const getMaxWidth = () => {
+    if (isMobile) return "100%";
+    if (isTablet) return "100%";
+    return 1400;
+  };
 
+  // ✅ FIXED: Responsive padding logic
+  const getPadding = () => {
+    if (isMobile) return "8px";
+    if (isTablet) return "12px";
+    return "16px";
+  };
+
+  // ✅ FIXED: Responsive chart height logic
+  const getChartHeight = () => {
+    if (isMobile) return 350; // Mobile
+    if (isTablet) return 450; // Tablet
+    return 550; // Desktop
+  };
+
+  const getVolumeHeight = () => {
+    if (isMobile) return 100; // Mobile
+    if (isTablet) return 120; // Tablet
+    return 150; // Desktop
+  };
   return (
-    <div style={{ maxWidth: 1400, margin: "0 auto", padding: "16px" }}>
+    <div
+      style={{
+        maxWidth: getMaxWidth(),
+        margin: "0 auto",
+        padding: getPadding(),
+      }}
+    >
       {/* Error Display */}
       {error && (
         <div
@@ -280,13 +326,15 @@ export default function CandleChart() {
         autoRefresh={autoRefresh}
         setAutoRefresh={setAutoRefresh}
         handleRefresh={handleRefresh}
+        isTablet={isTablet} // Thêm prop này
+        isMobile={isMobile} // Thêm prop này
       />
 
       {/* Historical Data Controls */}
       <div
         style={{
           marginBottom: 16,
-          padding: "16px",
+          padding: isTablet ? "14px" : "16px", // iPad: 14px
           backgroundColor: historicalYears > 0 ? "#fff3e0" : "#e8f5e8",
           border: `1px solid ${historicalYears > 0 ? "#ff9800" : "#4caf50"}`,
           borderRadius: 8,
@@ -308,13 +356,15 @@ export default function CandleChart() {
               <button
                 onClick={handleResetToRealtime}
                 style={{
-                  padding: "4px 8px",
-                  fontSize: 12,
-                  backgroundColor: "#ff9800",
-                  color: "white",
-                  border: "none",
-                  borderRadius: 4,
+                  padding: isTablet ? "8px 14px" : "6px 12px", // iPad: larger padding
+                  borderRadius: 16,
+                  border: `2px solid ${
+                    historicalYears === 0 ? "#4caf50" : "#ccc"
+                  }`,
+                  backgroundColor: historicalYears === 0 ? "#4caf50" : "white",
+                  color: historicalYears === 0 ? "white" : "#4caf50",
                   cursor: "pointer",
+                  fontSize: isTablet ? 14 : 12, // iPad: larger font
                 }}
               >
                 Back to Real-time
@@ -400,6 +450,8 @@ export default function CandleChart() {
         prediction={prediction}
         lastUpdate={lastUpdate}
         isLoading={isLoading}
+        isTablet={isTablet} // Thêm prop này
+        isMobile={isMobile} // Thêm prop này
       />
 
       <FilterSection
@@ -407,6 +459,8 @@ export default function CandleChart() {
         toggleFilter={toggleFilter}
         selectAllFilters={selectAllFilters}
         deselectAllFilters={deselectAllFilters}
+        isTablet={isTablet} // Thêm prop này
+        isMobile={isMobile} // Thêm prop này
       />
 
       {/* Main Price Chart */}
@@ -417,8 +471,8 @@ export default function CandleChart() {
           border: "1px solid #e0e0e0",
           borderRadius: "8px",
           overflow: "hidden",
-          minHeight: 600,
-          height: 600,
+          minHeight: 540,
+          height: getChartHeight(),
           backgroundColor: "white",
         }}
       />
@@ -436,23 +490,29 @@ export default function CandleChart() {
         }}
       /> */}
 
-      <TrendAnalysis trendAnalysis={trendAnalysis} />
+      <TrendAnalysis
+        trendAnalysis={trendAnalysis}
+        isTablet={isTablet} // Thêm prop này
+        isMobile={isMobile} // Thêm prop này
+      />
 
       {riskData && (
         <RiskPanel
           riskData={riskData}
           isVisible={isVisible}
           setIsVisible={setIsVisible}
+          isTablet={isTablet} // Thêm prop này
+          isMobile={isMobile} // Thêm prop này
         />
       )}
-
+      <CryptoNews isMobile={isMobile} isTablet={isTablet} coin={coin} />
       {/* QR Code Section */}
       <div>
         <Image
           src={QRCODE}
           alt="Volume Chart Layout"
-          width={250}
-          height={250}
+          width={isMobile ? 180 : isTablet ? 220 : 250}
+          height={isMobile ? 180 : isTablet ? 220 : 250}
           style={{
             borderRadius: "8px",
             border: "1px solid #dee2e6",
@@ -465,24 +525,28 @@ export default function CandleChart() {
             marginTop: "8px",
             fontSize: "12px",
             color: "#6c757d",
-            width: "250px",
+            width: isMobile ? "180px" : isTablet ? "220px" : "250px",
           }}
         >
           <p
             style={{
-              fontSize: "20px",
+              fontSize: isTablet ? "18px" : "20px", // iPad: 18px
               fontWeight: "bold",
               textAlign: "left",
               color: "#d32f2f",
               margin: 0,
-              padding: "16px 32px",
+              padding: isMobile
+                ? "12px 20px"
+                : isTablet
+                ? "14px 24px"
+                : "16px 32px",
               backgroundColor: "#ffebee",
               borderRadius: "8px",
               border: "2px dashed #d32f2f",
-              width: "250px",
+              width: isMobile ? "180px" : isTablet ? "220px" : "250px",
             }}
           >
-            Ủng hộ mifnh nha
+            Ủng hộ mình nha
           </p>
         </div>
       </div>

@@ -17,8 +17,8 @@ export const INTERVALS = [
   "1d",
   "1w",
 ];
-//export const API_URL = "https://be-crypto-tool-1.onrender.com";
-export const API_URL = "http://localhost:4000";
+export const API_URL = "https://be-crypto-tool-1.onrender.com";
+//export const API_URL = "http://localhost:4000";
 export const FLAG_CONFIGS = {
   SMC: { color: "red", text: "SMC↓", shape: "arrowDown" as const },
   SHOCK: { color: "blue", text: "Shock", shape: "circle" as const },

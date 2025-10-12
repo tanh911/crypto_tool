@@ -10,8 +10,8 @@ export function PredictionDisplay({ prediction }: PredictionDisplayProps) {
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 12,
-        padding: "8px 12px",
+        gap: 1,
+        padding: "4px 8px 1px 12px",
         backgroundColor: "white",
         borderRadius: 6,
         border: `1px solid ${
@@ -21,9 +21,10 @@ export function PredictionDisplay({ prediction }: PredictionDisplayProps) {
             ? "#f44336"
             : "#2196f3"
         }`,
+        fontSize: 11.5,
       }}
     >
-      <div style={{ fontWeight: "bold", fontSize: 16 }}>
+      <div style={{ fontWeight: "bold", fontSize: 12 }}>
         {prediction.direction === "BULLISH"
           ? "📈 BULLISH"
           : prediction.direction === "BEARISH"
@@ -38,12 +39,12 @@ export function PredictionDisplay({ prediction }: PredictionDisplayProps) {
       </div>
       {prediction.targetPrice && (
         <div>
-          Target: <strong>{prediction.targetPrice.toFixed(4)}</strong>
+          Target: <strong>|{prediction.targetPrice.toFixed(4)}</strong>
         </div>
       )}
       {prediction.stopLoss && (
         <div>
-          Stop: <strong>{prediction.stopLoss.toFixed(4)}</strong>
+          Stop: <strong>|{prediction.stopLoss.toFixed(4)}</strong>
         </div>
       )}
     </div>

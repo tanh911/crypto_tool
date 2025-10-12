@@ -5,12 +5,15 @@ interface RiskPanelProps {
   riskData: RiskData;
   isVisible: boolean;
   setIsVisible: (visible: boolean) => void;
+  isTablet: boolean; // Thêm prop isTablet
+  isMobile?: boolean; // Thêm prop isMobile, không bắt buộc
 }
 
 export function RiskPanel({
   riskData,
   isVisible,
   setIsVisible,
+  isTablet = false,
 }: RiskPanelProps) {
   // ✅ Hàm helper để đảm bảo flags là array
   const getFlagsArray = (flags: string | string[] | undefined): string[] => {
@@ -32,7 +35,8 @@ export function RiskPanel({
     <div
       style={{
         marginTop: 16,
-        padding: 16,
+        padding: isTablet ? "16px" : "20px",
+        fontSize: isTablet ? "14px" : "16px",
         border: "1px solid #e0e0e0",
         borderRadius: 8,
         backgroundColor: "#fafafa",
